@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model checkpoints (too large for git; use Hugging Face or separate release)
+model/checkpoints/
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Generated outputs (eval runs)
+model/Generated/
+
+# Dataset (user-provided)
+Dataset/
+*.zip
+
+# Logs
+*.log
+wandb/

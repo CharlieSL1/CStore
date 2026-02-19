@@ -62,11 +62,11 @@ See [model/README.md](model/README.md) for details.
 
 ## Audio Samples
 
-> **Play audio:** Click the link to open in browser. For inline player, [edit README on GitHub](https://github.com/CharlieSL1/CStore/edit/main/README.md) and drag each MP4 from `ref output/` into the editor.
+**[▶ Play all in browser](https://charliesl1.github.io/CStore/)** — No download, plays directly on the page.
 
 **random_seed_gen_001**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_001.mp4)
+[▶ Play](https://charliesl1.github.io/CStore/#random_seed_gen_001)
 
 <details>
 <summary>View CSD</summary>
@@ -102,7 +102,7 @@ e
 
 **random_seed_gen_002**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_002.mp4)
+[▶ Play](https://charliesl1.github.io/CStore/#random_seed_gen_002)
 
 <details>
 <summary>View CSD</summary>
@@ -136,7 +136,7 @@ e
 
 **random_seed_gen_003**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_003.mp4)
+[▶ Play](https://charliesl1.github.io/CStore/#random_seed_gen_003)
 
 <details>
 <summary>View CSD</summary>
@@ -168,7 +168,7 @@ e
 
 **random_seed_gen_004**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_004.mp4)
+[▶ Play](https://charliesl1.github.io/CStore/#random_seed_gen_004)
 
 <details>
 <summary>View CSD</summary>
@@ -200,7 +200,7 @@ e
 
 **user_input_seed**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/user_input_seed.mp4)
+[▶ Play](https://charliesl1.github.io/CStore/#user_input_seed)
 
 <details>
 <summary>View CSD</summary>
@@ -211,7 +211,7 @@ Same as random_seed_gen_003.
 
 **variation_1**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_1.mp4)
+[▶ Play](https://charliesl1.github.io/CStore/#variation_1)
 
 <details>
 <summary>View CSD</summary>
@@ -244,7 +244,7 @@ e
 
 **variation_2**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_2.mp4)
+[▶ Play](https://charliesl1.github.io/CStore/#variation_2)
 
 <details>
 <summary>View CSD</summary>
@@ -277,7 +277,7 @@ e
 
 **variation_3**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_3.mp4)
+[▶ Play](https://charliesl1.github.io/CStore/#variation_3)
 
 <details>
 <summary>View CSD</summary>
@@ -341,11 +341,12 @@ e
 ```
 CStore/
 ├── Convertor/     # Cabbage/Csound tools
+├── docs/          # GitHub Pages — audio player (charliesl1.github.io/CStore)
 ├── model/         # Training, evaluation, generation
 │   ├── checkpoints/   # V1.0.0, V1.0.1, V1.0.2
 │   ├── evaluate.py
 │   └── generate.py
-├── ref output/    # Audio samples
+├── ref output/    # Audio samples (.csd + .mp3)
 └── media/
 ```
 

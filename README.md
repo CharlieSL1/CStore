@@ -62,9 +62,11 @@ See [model/README.md](model/README.md) for details.
 
 ## Audio Samples
 
+> **Play audio:** Click the link to open in browser. For inline player, [edit README on GitHub](https://github.com/CharlieSL1/CStore/edit/main/README.md) and drag each MP4 from `ref output/` into the editor.
+
 **random_seed_gen_001**
 
-![▶ Play](ref%20output/random_seed_gen_001.mp4)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_001.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -100,7 +102,7 @@ e
 
 **random_seed_gen_002**
 
-![▶ Play](ref%20output/random_seed_gen_002.mp4)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_002.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -134,7 +136,7 @@ e
 
 **random_seed_gen_003**
 
-![▶ Play](ref%20output/random_seed_gen_003.mp4)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_003.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -166,7 +168,7 @@ e
 
 **random_seed_gen_004**
 
-![▶ Play](ref%20output/random_seed_gen_004.mp4)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_004.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -198,7 +200,7 @@ e
 
 **user_input_seed**
 
-![▶ Play](ref%20output/user_input_seed.mp4)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/user_input_seed.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -209,7 +211,7 @@ Same as random_seed_gen_003.
 
 **variation_1**
 
-![▶ Play](ref%20output/variation_1.mp4)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_1.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -242,7 +244,7 @@ e
 
 **variation_2**
 
-![▶ Play](ref%20output/variation_2.mp4)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_2.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -275,7 +277,7 @@ e
 
 **variation_3**
 
-![▶ Play](ref%20output/variation_3.mp4)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_3.mp4)
 
 <details>
 <summary>View CSD</summary>

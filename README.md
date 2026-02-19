@@ -62,11 +62,11 @@ See [model/README.md](model/README.md) for details.
 
 ## Audio Samples
 
-**[▶ Play all in browser](https://charliesl1.github.io/CStore/)** — No download, plays directly on the page.
+[All audio (ref output)](https://github.com/CharlieSL1/CStore/tree/main/ref%20output) · Or [edit README](https://github.com/CharlieSL1/CStore/edit/main/README.md) and drag MP3 into each sample to embed playback.
 
 **random_seed_gen_001**
 
-[▶ Play](https://charliesl1.github.io/CStore/#random_seed_gen_001)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_001.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -102,7 +102,7 @@ e
 
 **random_seed_gen_002**
 
-[▶ Play](https://charliesl1.github.io/CStore/#random_seed_gen_002)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_002.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -136,7 +136,7 @@ e
 
 **random_seed_gen_003**
 
-[▶ Play](https://charliesl1.github.io/CStore/#random_seed_gen_003)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_003.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -168,7 +168,7 @@ e
 
 **random_seed_gen_004**
 
-[▶ Play](https://charliesl1.github.io/CStore/#random_seed_gen_004)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_004.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -200,7 +200,7 @@ e
 
 **user_input_seed**
 
-[▶ Play](https://charliesl1.github.io/CStore/#user_input_seed)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/user_input_seed.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -211,7 +211,7 @@ Same as random_seed_gen_003.
 
 **variation_1**
 
-[▶ Play](https://charliesl1.github.io/CStore/#variation_1)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_1.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -244,7 +244,7 @@ e
 
 **variation_2**
 
-[▶ Play](https://charliesl1.github.io/CStore/#variation_2)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_2.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -277,7 +277,7 @@ e
 
 **variation_3**
 
-[▶ Play](https://charliesl1.github.io/CStore/#variation_3)
+[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_3.mp3)
 
 <details>
 <summary>View CSD</summary>

@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CStore — Text-to-Csound Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-hover: #79b8ff;
+      --success: #3fb950;
+      --error: #f85149;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .header-links {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1.2rem;
+      font-family: inherit;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-decoration: none;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+    .btn-primary:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .btn-ide {
+      background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
+      color: #fff;
+    }
+    .btn-ide:hover {
+      filter: brightness(1.1);
+    }
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+    @media (max-width: 900px) {
+      .main-grid { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 0.75rem 1rem;
+      background: rgba(0,0,0,0.2);
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    .panel-body {
+      padding: 1rem;
+      min-height: 200px;
+    }
+    #fft-canvas {
+      width: 100%;
+      height: 220px;
+      display: block;
+      background: #0a0e12;
+      border-radius: 6px;
+    }
+    .csd-view {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 320px;
+      overflow-y: auto;
+      padding: 1rem;
+      background: #0a0e12;
+      border-radius: 6px;
+      color: #c9d1d9;
+    }
+    .csd-view.empty {
+      color: var(--muted);
+      font-style: italic;
+    }
+    .status {
+      padding: 0.5rem 1rem;
+      font-size: 0.9rem;
+      border-radius: 6px;
+      margin-bottom: 1rem;
+    }
+    .status.loading { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
+    .status.error { background: rgba(248, 81, 73, 0.15); color: var(--error); }
+    .status.success { background: rgba(63, 185, 80, 0.15); color: var(--success); }
+    .audio-controls {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      margin-top: 0.75rem;
+    }
+    audio {
+      flex: 1;
+      height: 36px;
+    }
+    .copy-hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.5rem;
+    }
+    .folder-panel {
+      margin-top: 1.5rem;
+    }
+    .folder-panel .panel-body {
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .folder-item {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.6rem 0.8rem;
+      margin-bottom: 0.25rem;
+      border-radius: 8px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.2s;
+      border: 1px solid transparent;
+    }
+    .folder-item:hover {
+      background: rgba(88, 166, 255, 0.1);
+      border-color: var(--border);
+    }
+    .folder-item.active {
+      background: rgba(88, 166, 255, 0.15);
+      border-color: var(--accent);
+    }
+    .folder-item .icon {
+      font-size: 1.2rem;
+      opacity: 0.8;
+    }
+    .folder-item .name {
+      flex: 1;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--text);
+    }
+    .folder-item .meta {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .folder-empty {
+      color: var(--muted);
+      font-style: italic;
+      padding: 1rem;
+    }
+    footer {
+      margin-top: 2rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    footer a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>CStore — Text-to-Csound</h1>
+      <div class="header-links">
+        <button id="btn-generate" class="btn btn-primary">
+          <span class="btn-icon">▶</span> Generate
+        </button>
+        <a href="https://ide.csound.com/editor/OE3qtlvC0RKjq47vPDdx" target="_blank" rel="noopener" class="btn btn-ide">
+          Open Csound IDE →
+        </a>
+      </div>
+    </header>
+
+    <div id="status" class="status" style="display:none;"></div>
+
+    <div class="main-grid">
+      <div class="panel">
+        <div class="panel-header">FFT / Waveform</div>
+        <div class="panel-body">
+          <canvas id="fft-canvas" width="500" height="220"></canvas>
+          <div class="audio-controls">
+            <audio id="audio" controls style="display:none;"></audio>
+          </div>
+          <p class="copy-hint">Generate to see waveform. Play audio for live FFT.</p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">CSD Source</div>
+        <div class="panel-body">
+          <pre id="csd-display" class="csd-view empty">Click Generate to create a CSD file.</pre>
+          <button id="btn-copy" class="btn btn-secondary" style="margin-top:0.75rem;" disabled>Copy CSD</button>
+          <p class="copy-hint">Paste into Csound IDE to edit and run.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel folder-panel">
+      <div class="panel-header">📁 Generated Files</div>
+      <div class="panel-body">
+        <div id="folder-list" class="folder-empty">Loading...</div>
+      </div>
+    </div>
+
+    <footer>
+      CStore V1.0.1 · All generated files saved in <code>webapp/generated/</code> · 
+      <a href="https://github.com/CharlieSL1/CStore" target="_blank">GitHub</a>
+    </footer>
+  </div>
+
+  <script>
+    const btnGenerate = document.getElementById('btn-generate');
+    const btnCopy = document.getElementById('btn-copy');
+    const statusEl = document.getElementById('status');
+    const csdDisplay = document.getElementById('csd-display');
+    const audioEl = document.getElementById('audio');
+    const canvas = document.getElementById('fft-canvas');
+    const ctx = canvas.getContext('2d');
+    const folderList = document.getElementById('folder-list');
+
+    let currentCsd = '';
+    let currentRunId = null;
+    let mediaSourceNode = null;  // Create once per element; reuse on src change
+    let audioContext = null;
+    let analyser = null;
+    let animationId = null;
+
+    function showStatus(msg, type) {
+      statusEl.textContent = msg;
+      statusEl.className = 'status ' + type;
+      statusEl.style.display = 'block';
+    }
+
+    function hideStatus() {
+      statusEl.style.display = 'none';
+    }
+
+    async function generate() {
+      btnGenerate.disabled = true;
+      showStatus('Generating (retrying until audio succeeds)...', 'loading');
+      csdDisplay.textContent = '';
+      csdDisplay.classList.add('empty');
+      btnCopy.disabled = true;
+      audioEl.src = '';
+      audioEl.style.display = 'none';
+      drawEmptyCanvas();
+
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        let data = {};
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (!res.ok) {
+          throw new Error(data.error || `Generation failed (${res.status})`);
+        }
+
+        currentCsd = data.csd || '';
+        csdDisplay.textContent = currentCsd || '(empty)';
+        csdDisplay.classList.toggle('empty', !currentCsd);
+        btnCopy.disabled = !currentCsd;
+
+        // Watchdog: API only returns success when audio renders; always show both
+        const wavUrl = data.wav_url || (data.run_id ? `/generated/${data.run_id}/output.wav` : null);
+        if (!wavUrl) throw new Error('No audio URL in response');
+        audioEl.src = wavUrl;
+        audioEl.style.display = 'block';
+        showStatus('Generated! Files saved. Play to see FFT.', 'success');
+        setupAudioVisualization();
+        currentRunId = data.run_id;
+        refreshFolderList();
+      } catch (err) {
+        showStatus('Error: ' + err.message, 'error');
+        drawEmptyCanvas();
+      } finally {
+        btnGenerate.disabled = false;
+      }
+    }
+
+    function drawEmptyCanvas() {
+      ctx.fillStyle = '#0a0e12';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#30363d';
+      ctx.font = '14px Outfit';
+      ctx.textAlign = 'center';
+      ctx.fillText('Generate and play audio to see FFT', canvas.width / 2, canvas.height / 2);
+    }
+
+    function setupAudioVisualization() {
+      if (mediaSourceNode) {
+        // Reuse existing graph; only restart draw loop
+        if (animationId) cancelAnimationFrame(animationId);
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        function draw() {
+          animationId = requestAnimationFrame(draw);
+          analyser.getByteFrequencyData(dataArray);
+          ctx.fillStyle = 'rgba(10, 14, 18, 0.3)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          const barWidth = (canvas.width / bufferLength) * 2.5;
+          let x = 0;
+          for (let i = 0; i < bufferLength; i++) {
+            const barHeight = (dataArray[i] / 255) * canvas.height * 0.9;
+            const hue = 200 + (i / bufferLength) * 60;
+            ctx.fillStyle = `hsla(${hue}, 70%, 55%, 0.8)`;
+            ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+            x += barWidth + 1;
+          }
+        }
+        draw();
+        return;
+      }
+      if (audioContext) audioContext.close();
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+
+      mediaSourceNode = audioContext.createMediaElementSource(audioEl);
+      mediaSourceNode.connect(analyser);
+      analyser.connect(audioContext.destination);
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      function draw() {
+        animationId = requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(dataArray);
+
+        ctx.fillStyle = 'rgba(10, 14, 18, 0.3)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const barWidth = (canvas.width / bufferLength) * 2.5;
+        let x = 0;
+
+        for (let i = 0; i < bufferLength; i++) {
+          const barHeight = (dataArray[i] / 255) * canvas.height * 0.9;
+          const hue = 200 + (i / bufferLength) * 60;
+          ctx.fillStyle = `hsla(${hue}, 70%, 55%, 0.8)`;
+          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+          x += barWidth + 1;
+        }
+      }
+      draw();
+    }
+
+    audioEl.addEventListener('play', () => {
+      if (audioContext?.state === 'suspended') audioContext.resume();
+    });
+    audioEl.addEventListener('ended', () => {
+      if (animationId) cancelAnimationFrame(animationId);
+      drawEmptyCanvas();
+    });
+
+    function copyCsd() {
+      if (!currentCsd) return;
+      navigator.clipboard.writeText(currentCsd).then(() => {
+        const orig = btnCopy.textContent;
+        btnCopy.textContent = 'Copied!';
+        setTimeout(() => { btnCopy.textContent = orig; }, 1500);
+      }).catch(() => showStatus('Copy failed. Please select and copy manually.', 'error'));
+    }
+
+    async function refreshFolderList() {
+      try {
+        const res = await fetch('/api/list');
+        const data = await res.json();
+        const runs = (data.runs || []).filter(r => r.has_wav);
+        if (runs.length === 0) {
+          folderList.innerHTML = '<span class="folder-empty">No generated files yet.</span>';
+          folderList.className = '';
+          return;
+        }
+        folderList.className = '';
+        const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+        folderList.innerHTML = runs.map(r => {
+          const m = String(r.run_id).match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+          const label = m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : String(r.run_id).slice(0, 20);
+          const isActive = r.run_id === currentRunId ? ' active' : '';
+          return `<div class="folder-item${isActive}" data-run-id="${esc(r.run_id)}">
+            <span class="icon">🎵</span>
+            <span class="name">${esc(label)}</span>
+            <span class="meta">.csd · .wav</span>
+          </div>`;
+        }).join('');
+      } catch {
+        folderList.innerHTML = '<span class="folder-empty">Failed to load.</span>';
+      }
+    }
+
+    folderList.addEventListener('click', (e) => {
+      const item = e.target.closest('.folder-item');
+      if (item && item.dataset.runId) {
+        e.preventDefault();
+        loadRun(item.dataset.runId);
+      }
+    });
+
+    async function loadRun(runId) {
+      if (!runId || /[./\\]/.test(runId)) return;
+      try {
+        const csdRes = await fetch(`/generated/${runId}/output.csd`);
+        if (!csdRes.ok) throw new Error('File not found');
+        const csdText = await csdRes.text();
+        currentCsd = csdText;
+        currentRunId = runId;
+        csdDisplay.textContent = csdText;
+        csdDisplay.classList.remove('empty');
+        btnCopy.disabled = false;
+        audioEl.src = `/generated/${runId}/output.wav`;
+        audioEl.style.display = 'block';
+        setupAudioVisualization();
+        hideStatus();
+        refreshFolderList();
+      } catch (err) {
+        showStatus('Error loading: ' + err.message, 'error');
+      }
+    }
+
+    btnGenerate.addEventListener('click', generate);
+    btnCopy.addEventListener('click', copyCsd);
+
+    drawEmptyCanvas();
+    refreshFolderList();
+  </script>
+</body>
+</html>

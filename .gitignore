@@ -33,6 +33,10 @@ model/checkpoints/
 # Generated outputs (eval runs)
 model/Generated/
 
+# Webapp generated files (stored locally, not in repo)
+webapp/generated/*
+!webapp/generated/.gitkeep
+
 # Dataset (user-provided)
 Dataset/
 *.zip

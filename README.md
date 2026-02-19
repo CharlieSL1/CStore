@@ -62,8 +62,6 @@ See [model/README.md](model/README.md) for details.
 
 ## Audio Samples
 
-[All audio (ref output)](https://github.com/CharlieSL1/CStore/tree/main/ref%20output) · Or [edit README](https://github.com/CharlieSL1/CStore/edit/main/README.md) and drag MP3 into each sample to embed playback.
-
 **random_seed_gen_001**
 
 [▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_001.mp3)

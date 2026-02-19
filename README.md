@@ -64,7 +64,7 @@ See [model/README.md](model/README.md) for details.
 
 **random_seed_gen_001**
 
-<audio controls src="ref%20output/random_seed_gen_001.wav" style="height:32px;max-width:100%"></audio>
+![▶ Play](ref%20output/random_seed_gen_001.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -100,7 +100,7 @@ e
 
 **random_seed_gen_002**
 
-<audio controls src="ref%20output/random_seed_gen_002.wav" style="height:32px;max-width:100%"></audio>
+![▶ Play](ref%20output/random_seed_gen_002.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -134,7 +134,7 @@ e
 
 **random_seed_gen_003**
 
-<audio controls src="ref%20output/random_seed_gen_003.wav" style="height:32px;max-width:100%"></audio>
+![▶ Play](ref%20output/random_seed_gen_003.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -166,7 +166,7 @@ e
 
 **random_seed_gen_004**
 
-<audio controls src="ref%20output/random_seed_gen_004.wav" style="height:32px;max-width:100%"></audio>
+![▶ Play](ref%20output/random_seed_gen_004.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -198,7 +198,7 @@ e
 
 **user_input_seed**
 
-<audio controls src="ref%20output/user_input_seed.wav" style="height:32px;max-width:100%"></audio>
+![▶ Play](ref%20output/user_input_seed.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -209,7 +209,7 @@ Same as random_seed_gen_003.
 
 **variation_1**
 
-<audio controls src="ref%20output/variation_1.wav" style="height:32px;max-width:100%"></audio>
+![▶ Play](ref%20output/variation_1.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -242,7 +242,7 @@ e
 
 **variation_2**
 
-<audio controls src="ref%20output/variation_2.wav" style="height:32px;max-width:100%"></audio>
+![▶ Play](ref%20output/variation_2.mp4)
 
 <details>
 <summary>View CSD</summary>
@@ -275,7 +275,7 @@ e
 
 **variation_3**
 
-<audio controls src="ref%20output/variation_3.wav" style="height:32px;max-width:100%"></audio>
+![▶ Play](ref%20output/variation_3.mp4)
 
 <details>
 <summary>View CSD</summary>

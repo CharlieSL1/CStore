@@ -62,8 +62,12 @@ See [model/README.md](model/README.md) for details.
 
 ## Audio Samples
 
+**random_seed_gen_001**
+
+<audio controls src="ref%20output/random_seed_gen_001.wav" style="height:32px;max-width:100%"></audio>
+
 <details>
-<summary><b>random_seed_gen_001</b> — <audio controls src="ref%20output/random_seed_gen_001.wav" style="height:24px;vertical-align:middle"></audio></summary>
+<summary>View CSD</summary>
 
 ```csd
 <CsoundSynthesizer>
@@ -94,8 +98,12 @@ e
 
 </details>
 
+**random_seed_gen_002**
+
+<audio controls src="ref%20output/random_seed_gen_002.wav" style="height:32px;max-width:100%"></audio>
+
 <details>
-<summary><b>random_seed_gen_002</b> — <audio controls src="ref%20output/random_seed_gen_002.wav" style="height:24px;vertical-align:middle"></audio></summary>
+<summary>View CSD</summary>
 
 ```csd
 <CsoundSynthesizer>
@@ -124,8 +132,12 @@ e
 
 </details>
 
+**random_seed_gen_003**
+
+<audio controls src="ref%20output/random_seed_gen_003.wav" style="height:32px;max-width:100%"></audio>
+
 <details>
-<summary><b>random_seed_gen_003</b> — <audio controls src="ref%20output/random_seed_gen_003.wav" style="height:24px;vertical-align:middle"></audio></summary>
+<summary>View CSD</summary>
 
 ```csd
 <CsoundSynthesizer>
@@ -152,8 +164,12 @@ e
 
 </details>
 
+**random_seed_gen_004**
+
+<audio controls src="ref%20output/random_seed_gen_004.wav" style="height:32px;max-width:100%"></audio>
+
 <details>
-<summary><b>random_seed_gen_004</b> — <audio controls src="ref%20output/random_seed_gen_004.wav" style="height:24px;vertical-align:middle"></audio></summary>
+<summary>View CSD</summary>
 
 ```csd
 <CsoundSynthesizer>
@@ -180,15 +196,23 @@ e
 
 </details>
 
-<details>
-<summary><b>user_input_seed</b> — <audio controls src="ref%20output/user_input_seed.wav" style="height:24px;vertical-align:middle"></audio></summary>
+**user_input_seed**
 
-Same CSD as random_seed_gen_003.
+<audio controls src="ref%20output/user_input_seed.wav" style="height:32px;max-width:100%"></audio>
+
+<details>
+<summary>View CSD</summary>
+
+Same as random_seed_gen_003.
 
 </details>
 
+**variation_1**
+
+<audio controls src="ref%20output/variation_1.wav" style="height:32px;max-width:100%"></audio>
+
 <details>
-<summary><b>variation_1</b> — <audio controls src="ref%20output/variation_1.wav" style="height:24px;vertical-align:middle"></audio></summary>
+<summary>View CSD</summary>
 
 ```csd
 <CsoundSynthesizer>
@@ -216,8 +240,12 @@ e
 
 </details>
 
+**variation_2**
+
+<audio controls src="ref%20output/variation_2.wav" style="height:32px;max-width:100%"></audio>
+
 <details>
-<summary><b>variation_2</b> — <audio controls src="ref%20output/variation_2.wav" style="height:24px;vertical-align:middle"></audio></summary>
+<summary>View CSD</summary>
 
 ```csd
 <CsoundSynthesizer>
@@ -245,8 +273,12 @@ e
 
 </details>
 
+**variation_3**
+
+<audio controls src="ref%20output/variation_3.wav" style="height:32px;max-width:100%"></audio>
+
 <details>
-<summary><b>variation_3</b> — <audio controls src="ref%20output/variation_3.wav" style="height:24px;vertical-align:middle"></audio></summary>
+<summary>View CSD</summary>
 
 ```csd
 <CsoundSynthesizer>

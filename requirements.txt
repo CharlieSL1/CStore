@@ -3,3 +3,4 @@ transformers>=4.40
 datasets
 numpy
 soundfile>=0.12
+flask>=3.0

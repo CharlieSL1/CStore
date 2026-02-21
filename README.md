@@ -18,6 +18,8 @@ Instead of generating audio directly, CStore generates **Csound project files (.
 
 ![CStore Banner](media/CStore.gif)
 
+**CSTORE Tutorials** — [Watch on YouTube](https://youtu.be/RUQYTY4D2fI)
+
 ---
 
 ## Quick Start
@@ -64,7 +66,7 @@ See [model/README.md](model/README.md) for details.
 
 **random_seed_gen_001**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_001.mp3)
+[Download the rendered csd to Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_001.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -100,7 +102,7 @@ e
 
 **random_seed_gen_002**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_002.mp3)
+[Download the rendered csd to Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_002.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -134,7 +136,7 @@ e
 
 **random_seed_gen_003**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_003.mp3)
+[Download the rendered csd to Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_003.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -166,7 +168,7 @@ e
 
 **random_seed_gen_004**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_004.mp3)
+[Download the rendered csd to Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/random_seed_gen_004.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -198,7 +200,7 @@ e
 
 **user_input_seed**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/user_input_seed.mp3)
+[Download the rendered csd to Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/user_input_seed.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -209,7 +211,7 @@ Same as random_seed_gen_003.
 
 **variation_1**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_1.mp3)
+[Download the rendered csd to Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_1.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -242,7 +244,7 @@ e
 
 **variation_2**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_2.mp3)
+[Download the rendered csd to Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_2.mp3)
 
 <details>
 <summary>View CSD</summary>
@@ -275,7 +277,7 @@ e
 
 **variation_3**
 
-[▶ Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_3.mp3)
+[Download the rendered csd to Play](https://github.com/CharlieSL1/CStore/raw/main/ref%20output/variation_3.mp3)
 
 <details>
 <summary>View CSD</summary>

@@ -18,7 +18,11 @@ Instead of generating audio directly, CStore generates **Csound project files (.
 
 ![CStore Banner](media/CStore.gif)
 
-**CSTORE Tutorials** — [![YouTube thumbnail](https://img.youtube.com/vi/RUQYTY4D2fI/hqdefault.jpg)](https://youtu.be/RUQYTY4D2fI)
+**CSTORE Tutorials**
+
+[![YouTube](https://img.youtube.com/vi/RUQYTY4D2fI/hqdefault.jpg)](https://youtu.be/RUQYTY4D2fI)
+
+*Click to watch*
 
 ---
 

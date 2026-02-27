@@ -6,7 +6,7 @@
 [![Issues][issues-shield]][issues-url]
 [![MIT License][license-shield]][license-url]
 
-[![Contributors](https://contrib.rocks/image?repo=CharlieSL1/CStore)](https://github.com/CharlieSL1/CStore/graphs/contributors)
+[![Contributors](https://contrib.rocks/image?repo=CharlieSL1/CStore&t=1)](https://github.com/CharlieSL1/CStore/graphs/contributors)
 
 **CStore: Reframing Text-to-Music from "One-Shot Waveforms" to an Interpretable, Durable, and Editable Csound Specification**
 

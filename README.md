@@ -77,15 +77,22 @@ See [model/README.md](model/README.md) for details.
 
 ```csd
 <CsoundSynthesizer>
-<CsOptions></CsOptions>
+
+<CsOptions>
+</CsOptions>
+
 <CsInstruments>
+
 0dbfs  = 1
+
 gisin ftgen 0, 0, 2^10, 10, 1
+
 instr 1
 ksig randomh 400, 1800, 150
 aout poscil .2, 1000+ksig, gisin
 outs aout, aout
 endin
+
 instr 2
 ksig randomh 400, 1800, 150
 khp line 1, p3, 400
@@ -93,12 +100,14 @@ ksig atonek ksig, khp
 aout poscil .2, 1000+ksig, gisin
 outs aout, aout
 endin
+
 </CsInstruments>
+
 <CsScore>
 i 1 0 5
 i 2 5.5 5
-e
 </CsScore>
+
 </CsoundSynthesizer>
 ```
 
@@ -113,9 +122,14 @@ e
 
 ```csd
 <CsoundSynthesizer>
-<CsOptions></CsOptions>
+
+<CsOptions>
+</CsOptions>
+
 <CsInstruments>
+
 0dbfs  = 1
+
 instr 1
 kfreq = 220
 kc1 = 5
@@ -125,14 +139,16 @@ kvdpth line 0, p3, p5
 asig fmb3 .4, kfreq, kc1, kc2, kvdpth, kvrate
 outs asig, asig
 endin
+
 </CsInstruments>
+
 <CsScore>
 f 1 0 32768 10 1
 i 1 0 2  5 0.1
 i 1 3 2 .5 .5 0.01
 i 1 4 .5 .5 0.01
-e
 </CsScore>
+
 </CsoundSynthesizer>
 ```
 
@@ -147,9 +163,14 @@ e
 
 ```csd
 <CsoundSynthesizer>
-<CsOptions></CsOptions>
+
+<CsOptions>
+</CsOptions>
+
 <CsInstruments>
+
 0dbfs  = 1
+
 instr 1
 kcps = 110
 kcar = 1
@@ -159,12 +180,14 @@ kndx ceil kndx
 asig foscili .5, kcps, kcar, kmod, kndx, 1
 outs asig, asig
 endin
+
 </CsInstruments>
+
 <CsScore>
 f 1 0 16384 10 1
 i 1 0 10 1.414
-e
 </CsScore>
+
 </CsoundSynthesizer>
 ```
 
@@ -179,9 +202,14 @@ e
 
 ```csd
 <CsoundSynthesizer>
-<CsOptions></CsOptions>
+
+<CsOptions>
+</CsOptions>
+
 <CsInstruments>
+
 0dbfs  = 1
+
 instr 1
 kval randomh 0, 1.2, 20
 if kval >0 && kval<=.5 then kval = 1
@@ -191,12 +219,14 @@ endif
 asig poscil .7, 440*kval, 1
 outs asig, asig
 endin
+
 </CsInstruments>
+
 <CsScore>
 f1 0 16384 10 1
 i 1 0 5
-e
 </CsScore>
+
 </CsoundSynthesizer>
 ```
 
@@ -221,11 +251,18 @@ Same as random_seed_gen_003.
 <summary>View CSD</summary>
 
 ```csd
+
 <CsoundSynthesizer>
-<CsOptions></CsOptions>
+
+<CsOptions>
+</CsOptions>
+
 <CsInstruments>
+
 seed 7919
+
 0dbfs  = 1
+
 instr 1
 kcps = 110
 kcar = 1
@@ -235,12 +272,14 @@ kndx ceil kndx
 asig foscili .5, 220+kcar, kmod, kndx, 1
 outs asig, asig
 endin
+
 </CsInstruments>
+
 <CsScore>
 f 1 0 16384 10 1
 i 1 0.5 12.5 2.2624
-e
 </CsScore>
+
 </CsoundSynthesizer>
 ```
 
@@ -254,11 +293,18 @@ e
 <summary>View CSD</summary>
 
 ```csd
+
 <CsoundSynthesizer>
-<CsOptions></CsOptions>
+
+<CsOptions>
+</CsOptions>
+
 <CsInstruments>
+
 seed 15838
+
 0dbfs  = 1
+
 instr 1
 kcps = 110
 kcar = 1
@@ -268,12 +314,14 @@ kndx ceil kndx
 asig foscili .5, kcps, kcar, kmod, 1
 outs asig, asig
 endin
+
 </CsInstruments>
+
 <CsScore>
 f 1 0 16384 10 1
 i 1 1.0 15.0 2.4321
-e
 </CsScore>
+
 </CsoundSynthesizer>
 ```
 
@@ -287,11 +335,18 @@ e
 <summary>View CSD</summary>
 
 ```csd
+
 <CsoundSynthesizer>
-<CsOptions></CsOptions>
+
+<CsOptions>
+</CsOptions>
+
 <CsInstruments>
+
 seed 39595
+
 0dbfs  = 1
+
 instr 1
 kcps = 110
 kcar = 1
@@ -301,12 +356,14 @@ kndx ceil kndx
 asig foscili .5, kcps, kcar, kmod, kndx
 outs asig, asig
 endin
+
 </CsInstruments>
+
 <CsScore>
 f 1 0 16384 10 1
 i 1 2.5 22.5 2.9411
-e
 </CsScore>
+
 </CsoundSynthesizer>
 ```
 

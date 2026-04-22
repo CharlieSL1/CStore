@@ -1,0 +1,195 @@
+# CStore — Web Console
+
+A single project that contains both the UI and the backend for driving the
+CStore text-to-Csound generator locally.
+
+- **UI** — Next.js 16 App Router + React 19 + Tailwind CSS v4 (editorial / studio
+  console aesthetic).
+- **Backend** — a small Flask sidecar in `server/` that loads the PyTorch model,
+  shells out to the `csound` CLI to render audio, and writes outputs to
+  `generated/`. The Next.js dev server proxies `/api/*` and `/generated/*` to
+  this sidecar via [`next.config.ts`](./next.config.ts).
+
+> **Why two processes?** The model is a Hugging Face GPT-2 checkpoint on
+> `.safetensors` + a BPE tokenizer loaded through Python, and rendering
+> requires running the `csound` command-line tool. Running that from Node
+> honestly isn't feasible, so the console keeps a Python sidecar running
+> locally. There is no Flask HTML anymore; Flask only exposes JSON endpoints
+> and the generated files.
+
+## Layout
+
+```
+webapp-next/
+├── app/                         # Next.js UI
+│   ├── _components/
+│   │   ├── Console.tsx          # main studio layout (library, transport, source)
+│   │   ├── CsoundTerminal.tsx   # live Csound / sidecar log viewer
+│   │   ├── EditDialog.tsx       # LLM edit modal (5 providers)
+│   │   ├── ManualEditDialog.tsx # hand-edit + re-render modal
+│   │   ├── ModelPicker.tsx      # checkpoint switcher
+│   │   └── Spectrum.tsx         # WebAudio FFT monitor
+│   ├── _lib/api.ts              # typed fetchers
+│   └── globals.css              # Tailwind v4 @theme tokens
+├── server/
+│   └── app.py                   # Flask API (generation, Csound render, edit, render, favorite)
+├── generated/                   # rendered .csd + .wav + meta.json per run (gitignored)
+├── next.config.ts               # proxies /api/* and /generated/* to 127.0.0.1:5000
+└── package.json                 # `npm run dev` and `npm run server`
+```
+
+## Requirements
+
+- Node.js 20+
+- Python 3.11+ with the deps in the repo root: `pip install -r ../requirements.txt`
+- [Csound](https://csound.com/) 6.18+ on your `PATH` (the `csound` binary)
+- At least one checkpoint in `../model/checkpoints/` (default: `Cstore_V1.0.2/best`)
+
+## Run it
+
+You need **two terminals** — one for the backend, one for the UI. From this
+folder:
+
+```bash
+# terminal 1 — backend (Flask on :5000)
+npm run server
+
+# terminal 2 — UI (Next.js on :3000)
+npm install      # first time only
+npm run dev
+```
+
+Open http://localhost:3000.
+
+`npm run server` is just a shortcut for `python server/app.py`, so you can
+also run that directly if you prefer a Python venv.
+
+To point the UI at a backend on a different host/port, set
+`CSTORE_BACKEND_URL` before `npm run dev` — see `next.config.ts`.
+
+## Keyboard shortcuts
+
+| Key       | Action                                                        |
+|-----------|---------------------------------------------------------------|
+| `G`       | Generate a new .csd                                           |
+| `Space`   | Play / pause render                                           |
+| `C`       | Copy CSD source                                               |
+| `E`       | Open the *Edit with LLM* dialog for the active run            |
+| `R`       | Open the *Edit manually* window (hand-edit + re-render)       |
+| `☆`       | Click a library row's star to pin it to **Favourites**        |
+| `⌘/Ctrl ↵`| Submit the active dialog                                      |
+| `Esc`     | Close the active dialog                                       |
+
+## Library & Favourites
+
+The left rail splits into **Favourites** and **Recent**. Click the star on
+any row to pin a timbre you like — pinned runs move into the Favourites
+section and stay there even after the 50-row recent cap rolls them out of
+the main list. The flag is persisted to that run's `meta.json`, so it
+survives restarts.
+
+The star is backed by `POST /api/favorite` (`{run_id, favorite?}`);
+omitting the `favorite` field toggles the current value.
+
+## Editing a run
+
+Two editors share the run-card footer:
+
+### Edit manually (`R`)
+
+Opens a monospace editor seeded from the current `.csd`. Edit by hand, press
+`⌘/Ctrl ↵` to send the text back through `POST /api/render`, which writes
+it as a fresh run and invokes the `csound` binary locally — no model, no
+network. The result loads into the console if Csound produces audio; if the
+source has an error the `.csd` is still saved and the Csound error surfaces
+in the dialog. Manual runs are tagged **MANUAL** in the library.
+
+### Edit with an external LLM (`E`)
+
+Any existing run can be sent to one of five providers along with a
+natural-language instruction (e.g. *"Add a plate reverb, lower the pitch by
+an octave"*). The model returns a revised `.csd`, which the backend renders
+with Csound and saves as a **new** run (the original is never overwritten).
+LLM-edited runs are marked **EDIT** in the Library rail and show their
+provenance (source run · provider · model · instruction) in the Run card.
+
+| Provider               | Key required | Default models (user-editable)                                                           |
+|------------------------|:------------:|------------------------------------------------------------------------------------------|
+| **Qwen · local**       | ✗ (Ollama)   | `qwen3.6:35b-a3b-coding-mxfp8`, `qwen3.6`, `qwen3:14b`, `qwen3:8b`, `qwen2.5-coder:7b` |
+| **Pollinations · free**| ✗            | `openai` → OpenAI's open-weight GPT-OSS-20B, served free via [Pollinations](https://github.com/pollinations/pollinations/blob/master/APIDOCS.md) at ~1 req/15 s |
+| OpenAI                 | ✓            | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.3-instant`                             |
+| Anthropic              | ✓            | `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`                      |
+| Gemini                 | ✓            | `gemini-3.1-pro`, `gemini-3-flash-preview`                                               |
+
+The model field is free text, so newer IDs work without a code change.
+Qwen reads `CSTORE_OLLAMA_URL` (default `http://127.0.0.1:11434`);
+Pollinations reads `CSTORE_POLLINATIONS_URL` (default
+`https://text.pollinations.ai`).
+
+### How the API key is handled
+
+- Stored **server-side only** in `~/.cstore/keys.json` with file mode `0600`.
+- The key never reaches the browser. The dialog only ever receives a mask
+  (`sk-p…LAST`, first 4 + last 4). The "show" toggle on the input is for
+  when you're typing a fresh key — the backend never echoes the full value
+  back.
+- `~/.cstore/` is outside this repo; it is not tracked by git.
+- The key is **not encrypted at rest**. Without a user-supplied master
+  password any "encryption" would just be obfuscation, so the real
+  protection is the file mode + the fact that nothing ever sends it to the
+  frontend. If you need stronger guarantees, manage the file yourself and
+  make it a symlink to a location on an encrypted volume.
+- To remove a key, click **remove** in the dialog or `DELETE /api/keys` with
+  `{"provider": "openai"}`.
+
+### Relevant API endpoints
+
+| Method   | Path                         | Purpose                                                                     |
+|----------|------------------------------|-----------------------------------------------------------------------------|
+| `GET`    | `/api/keys`                  | Per-provider `{present, masked}`                                            |
+| `POST`   | `/api/keys`                  | `{provider, key}` — store                                                   |
+| `DELETE` | `/api/keys`                  | `{provider}` — remove                                                       |
+| `GET`    | `/api/qwen/status`           | Ollama reachability + installed qwen tags                                   |
+| `GET`    | `/api/pollinations/status`   | Pollinations reachability + anonymous-tier models                           |
+| `POST`   | `/api/edit`                  | `{run_id, provider, model, instruction, think?}` — LLM edit, returns a new run |
+| `POST`   | `/api/render`                | `{csd, derived_from?}` — render hand-edited source, returns a new run       |
+| `POST`   | `/api/favorite`              | `{run_id, favorite?}` — pin/unpin in the Library (toggles if `favorite` omitted) |
+
+## Changing the model
+
+The **Model** strip under the status bar has:
+
+- a preset dropdown populated from `GET /api/models` (every folder under
+  `../model/checkpoints/` that contains a `config.json`, grouped by family);
+- a **path** input that accepts either a repo-relative label like
+  `Cstore_V1.0.2/best` or any absolute path on disk. Press Enter or click
+  **load** to apply.
+
+The default checkpoint is `Cstore_V1.0.2/best`, set in `server/app.py`.
+
+## API surface (for reference)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`  | `/` | Health / endpoint index |
+| `POST` | `/api/generate` | Draft `.csd` + render `.wav`. Body: `{ seed?, checkpoint? }` |
+| `GET`  | `/api/list` | List completed runs (+ pinned favourites) |
+| `GET`  | `/api/console` | Live console ring buffer (polled by the web terminal) |
+| `GET`  | `/api/models` | Discoverable checkpoints under `model/checkpoints/` |
+| `GET`  | `/api/model` | Currently active checkpoint |
+| `POST` | `/api/model` | `{ "path": "…" }` — swap the active checkpoint |
+| `POST` | `/api/edit` | LLM edit (see above) |
+| `POST` | `/api/render` | Manual-edit re-render (see above) |
+| `POST` | `/api/favorite` | Toggle a run's favourite flag |
+| `GET`  | `/generated/<run_id>/output.csd` | Source download |
+| `GET`  | `/generated/<run_id>/output.wav` | Rendered audio |
+
+## Production build
+
+```bash
+npm run build && npm run start   # UI on :3000
+npm run server                    # backend on :5000
+```
+
+The Flask sidecar is a development server; for a real deployment put it
+behind gunicorn or similar and change `CSTORE_BACKEND_URL` accordingly.

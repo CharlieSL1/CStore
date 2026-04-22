@@ -1,0 +1,171 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   CStore console — design tokens
+   Palette is intentionally opinionated: warm paper background, deep ink text,
+   a single ink-red accent, and one signal-green for level meters. No gradients,
+   no glassmorphism, no generic SaaS blue.
+--------------------------------------------------------------------------- */
+@theme {
+  --color-paper: #ece4d3;
+  --color-paper-2: #e3dac6;
+  --color-paper-3: #d8cdb4;
+  --color-ink: #18161a;
+  --color-ink-2: #2e2a2f;
+  --color-ink-muted: #6b6560;
+  --color-rule: #b9ae96;
+  --color-rule-2: #c9bfa7;
+  --color-ink-red: #b1321c;
+  --color-ink-red-2: #8a2612;
+  --color-signal: #2f6b3c;
+
+  --font-display: "Instrument Serif", "Source Serif 4", Georgia, serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius-card: 2px;
+}
+
+html,
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11", "tnum";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* A very subtle paper grain — not overdone, not "AI generated". */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.05;
+  mix-blend-mode: multiply;
+  background-image: radial-gradient(
+      circle at 25% 15%,
+      rgba(24, 22, 26, 0.6) 0.5px,
+      transparent 1px
+    ),
+    radial-gradient(circle at 70% 60%, rgba(24, 22, 26, 0.5) 0.5px, transparent 1px),
+    radial-gradient(circle at 40% 85%, rgba(24, 22, 26, 0.5) 0.5px, transparent 1px);
+  background-size: 140px 140px, 200px 200px, 180px 180px;
+}
+
+/* Utility classes used across components ---------------------------------- */
+.rule {
+  border-color: var(--color-rule);
+}
+.rule-soft {
+  border-color: var(--color-rule-2);
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-ink-muted);
+}
+.eyebrow-ink {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-ink);
+}
+.display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  line-height: 0.95;
+}
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* Crisp focus ring that matches the ink accent. */
+:where(button, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-ink-red);
+  outline-offset: 2px;
+}
+
+/* Minimalist scrollbars so code views don't feel chrome-heavy. */
+.scroll-ink::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-ink::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-ink::-webkit-scrollbar-thumb {
+  background: var(--color-rule);
+  border-radius: 999px;
+}
+.scroll-ink::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-muted);
+}
+
+/* Keycap used in the masthead + transport bar. */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  border: 1px solid var(--color-ink);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+/* Level meter LED segments. */
+.led {
+  width: 4px;
+  border-radius: 1px;
+  background: var(--color-rule);
+}
+.led.on {
+  background: var(--color-signal);
+}
+.led.hot {
+  background: var(--color-ink-red);
+}
+
+/* Crosshatched "rendering" state, hand-drawn feel. */
+@keyframes hatchSlide {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 24px 0;
+  }
+}
+.hatch {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(24, 22, 26, 0.12) 0 2px,
+    transparent 2px 12px
+  );
+  animation: hatchSlide 1.2s linear infinite;
+}
+
+/* Tick ruler used above the spectrum canvas. */
+.tick-rule {
+  background-image: linear-gradient(
+    to right,
+    var(--color-ink) 1px,
+    transparent 1px
+  );
+  background-size: 10% 100%;
+}

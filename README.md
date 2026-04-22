@@ -40,6 +40,71 @@ python evaluate.py --checkpoint checkpoints/Cstore_V1.0.1/best --num_samples 100
 
 ---
 
+## Web Console (`webapp-next/`)
+
+A local Next.js + Flask console for drafting, previewing, editing, and
+favouriting `.csd` renders in the browser.
+
+### 1 · Install prerequisites
+
+| Dependency | Version | Notes |
+|------------|---------|-------|
+| [Node.js](https://nodejs.org/) | 20+ | ships `npm`; needed for the Next.js UI |
+| Python | 3.11+ | the backend is a Flask sidecar |
+| [Csound](https://csound.com/) | 6.18+ | the `csound` CLI must be on your `PATH` |
+| CStore checkpoint | any | at least one folder under `model/checkpoints/` (default `Cstore_V1.0.2/best`) |
+
+Optional — for the local **Qwen** edit tab only:
+[Ollama](https://ollama.com/) running at `127.0.0.1:11434` with a Qwen model
+pulled (e.g. `ollama pull qwen2.5-coder:7b`).
+OpenAI / Claude / Gemini edits need their own API keys (stored server-side at
+`~/.cstore/keys.json`, chmod `0600`). The **Pollinations · free** tab is
+keyless and works out of the box.
+
+### 2 · Install project dependencies
+
+From the repo root:
+
+```bash
+pip install -r requirements.txt        # Python deps (torch, transformers, flask, …)
+cd webapp-next
+npm install                             # Node deps (next, react, tailwind)
+```
+
+### 3 · Start the two servers
+
+The UI and the Flask sidecar are separate processes. From `webapp-next/`, open
+two terminals:
+
+```bash
+# terminal 1 — backend (Flask on 127.0.0.1:5000)
+npm run server                          # == python server/app.py
+
+# terminal 2 — UI (Next.js on http://localhost:3000)
+npm run dev
+```
+
+Open **http://localhost:3000** in your browser. Press `G` to draft a `.csd`,
+`Space` to play, `E` to edit with an LLM, `R` to hand-edit the source, and
+click `☆` on any library row to pin a favourite.
+
+> The Next.js dev server proxies `/api/*` and `/generated/*` to the Flask
+> sidecar (see `webapp-next/next.config.ts`). To point at a backend on a
+> different host, set `CSTORE_BACKEND_URL` before `npm run dev`.
+
+### 4 · Production build (optional)
+
+```bash
+cd webapp-next
+npm run build && npm run start          # UI on :3000
+npm run server                          # backend on :5000
+```
+
+Full UI documentation, keyboard shortcuts, and API reference live in
+[`webapp-next/README.md`](webapp-next/README.md).
+
+---
+
 ## Usage
 
 | Task | Command |

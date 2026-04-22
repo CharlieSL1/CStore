@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+build
+.env*.local
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+
+# Python sidecar
+server/__pycache__/
+*.pyc
+
+# Rendered runs — user data, not source
+generated/

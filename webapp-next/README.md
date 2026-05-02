@@ -25,14 +25,14 @@ webapp-next/
 │   ├── _components/
 │   │   ├── Console.tsx          # main studio layout (library, transport, source)
 │   │   ├── CsoundTerminal.tsx   # live Csound / sidecar log viewer
-│   │   ├── EditDialog.tsx       # LLM edit modal (5 providers)
+│   │   ├── EditDialog.tsx       # LLM edit modal (6 providers)
 │   │   ├── ManualEditDialog.tsx # hand-edit + re-render modal
 │   │   ├── ModelPicker.tsx      # checkpoint switcher
 │   │   └── Spectrum.tsx         # WebAudio FFT monitor
 │   ├── _lib/api.ts              # typed fetchers
 │   └── globals.css              # Tailwind v4 @theme tokens
 ├── server/
-│   └── app.py                   # Flask API (generation, Csound render, edit, render, favorite)
+│   └── app.py                   # Flask API (generation, starter batches, Csound render, edit, favorite)
 ├── generated/                   # rendered .csd + .wav + meta.json per run (gitignored)
 ├── next.config.ts               # proxies /api/* and /generated/* to 127.0.0.1:5000
 └── package.json                 # `npm run dev` and `npm run server`
@@ -71,7 +71,8 @@ To point the UI at a backend on a different host/port, set
 
 | Key       | Action                                                        |
 |-----------|---------------------------------------------------------------|
-| `G`       | Generate a new .csd                                           |
+| `G`       | Generate one render                                           |
+| `S`       | Generate starter ideas batch (outputs / max tok controls)    |
 | `Space`   | Play / pause render                                           |
 | `C`       | Copy CSD source                                               |
 | `E`       | Open the *Edit with LLM* dialog for the active run            |
@@ -91,6 +92,55 @@ survives restarts.
 The star is backed by `POST /api/favorite` (`{run_id, favorite?}`);
 omitting the `favorite` field toggles the current value.
 
+## Starter batches
+
+The monitor panel has dedicated actions for:
+
+- **Generate one render** (`G`) — one fresh `.csd` + `.wav`.
+- **Generate starter ideas** (`S`) — multiple short related starts.
+- **Generate children** — from the selected mother/parent run.
+
+Use **outputs** to choose how many renders to make
+(`1`-`12`) and **max tok** to request a larger generation budget than the old
+400-token default (`100`-`500`). The backend still clamps the actual token
+budget to the model context window, so a request above the checkpoint's limit
+will not overflow the GPT-2 context.
+
+For `arpeggio`/`chord`, note selection supports:
+
+- **auto 2oct** — random distinct notes inside a 2-octave span.
+- **manual** — user-provided low/high MIDI bounds.
+
+Every starter is rewritten to a short score audition and tagged in
+`meta.json` as `kind: "starter"`. Modes are:
+
+- `single` — one note across the selected duration.
+- `arpeggio` — four short notes inside the same 1.5-second window.
+- `chord` — three simultaneous notes lasting 1.5 seconds.
+
+Starter/child outputs are stored in one persistent panel as batch tabs. Each
+new generate action appends a new tab (`Starter #...`, `Classic Child #...`,
+`LLM Child #...`) instead of replacing the current view. You can switch tabs,
+close a single batch, or clear all batches. Child cards inside the active tab
+still load that run's `.csd` + `.wav` into the existing player/source inspector.
+
+Tag semantics in the UI are strict:
+
+- **starter** = generated starter variation.
+- **child** = generated from a selected mother/parent run (shows `mother #...` lineage).
+
+Children generation supports two modes:
+
+- **classic** — deterministic source-derived score rewrites (`/api/generate-children`).
+- **llm variants** — provider/model-based automatic variation prompts (`/api/generate-children-llm`), no manual prompt required.
+
+`LLM VAR` drives tiered behavior:
+
+- **low** (`0.00-0.33`) — subtle changes close to the mother.
+- **medium** (`0.34-0.66`) — moderate timbre/register/articulation shifts.
+- **high** (`0.67-1.00`) — aggressive style-switch directives with explicit
+  anti-similarity constraints and stronger fallback divergence.
+
 ## Editing a run
 
 Two editors share the run-card footer:
@@ -106,17 +156,20 @@ in the dialog. Manual runs are tagged **MANUAL** in the library.
 
 ### Edit with an external LLM (`E`)
 
-Any existing run can be sent to one of five providers along with a
+Any existing run can be sent to one of six providers along with a
 natural-language instruction (e.g. *"Add a plate reverb, lower the pitch by
 an octave"*). The model returns a revised `.csd`, which the backend renders
 with Csound and saves as a **new** run (the original is never overwritten).
 LLM-edited runs are marked **EDIT** in the Library rail and show their
 provenance (source run · provider · model · instruction) in the Run card.
+When usage metadata is available from a provider, the run metadata also stores
+token counts and an estimated cost payload.
 
 | Provider               | Key required | Default models (user-editable)                                                           |
 |------------------------|:------------:|------------------------------------------------------------------------------------------|
 | **Qwen · local**       | ✗ (Ollama)   | `qwen3.6:35b-a3b-coding-mxfp8`, `qwen3.6`, `qwen3:14b`, `qwen3:8b`, `qwen2.5-coder:7b` |
 | **Pollinations · free**| ✗            | `openai` → OpenAI's open-weight GPT-OSS-20B, served free via [Pollinations](https://github.com/pollinations/pollinations/blob/master/APIDOCS.md) at ~1 req/15 s |
+| **OpenRouter · free**  | ✓            | `openrouter/free` (router), `qwen/qwen3-coder:free`, `openai/gpt-oss-20b:free`          |
 | OpenAI                 | ✓            | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.3-instant`                             |
 | Anthropic              | ✓            | `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`                      |
 | Gemini                 | ✓            | `gemini-3.1-pro`, `gemini-3-flash-preview`                                               |
@@ -124,7 +177,20 @@ provenance (source run · provider · model · instruction) in the Run card.
 The model field is free text, so newer IDs work without a code change.
 Qwen reads `CSTORE_OLLAMA_URL` (default `http://127.0.0.1:11434`);
 Pollinations reads `CSTORE_POLLINATIONS_URL` (default
-`https://text.pollinations.ai`).
+`https://text.pollinations.ai`); OpenRouter reads `CSTORE_OPENROUTER_URL`
+(default `https://openrouter.ai/api/v1`).
+
+#### OpenRouter free setup (requires key)
+
+1. Create an account at [OpenRouter](https://openrouter.ai/).
+2. Generate an API key at [OpenRouter keys](https://openrouter.ai/settings/keys).
+3. In the app's **Edit with LLM** dialog, choose **OpenRouter · free**, paste
+   the key, and save it.
+4. Keep the model as `openrouter/free` for auto-routed free inference, or
+   type a pinned free variant such as `...:free`.
+
+OpenRouter's free model pool and free-tier limits can change over time; check
+their docs before production use.
 
 ### How the API key is handled
 
@@ -142,6 +208,18 @@ Pollinations reads `CSTORE_POLLINATIONS_URL` (default
 - To remove a key, click **remove** in the dialog or `DELETE /api/keys` with
   `{"provider": "openai"}`.
 
+### Cost tracking for LLM edits
+
+- Free providers (`qwen`, `pollinations`) are logged with `estimated_usd: 0`.
+- Paid providers log token usage when returned by the upstream API.
+- Estimated USD for paid providers is only computed when provider rates are
+  configured through environment variables:
+  - `CSTORE_COST_OPENAI_PROMPT_PER_1M`, `CSTORE_COST_OPENAI_COMPLETION_PER_1M`
+  - `CSTORE_COST_ANTHROPIC_PROMPT_PER_1M`, `CSTORE_COST_ANTHROPIC_COMPLETION_PER_1M`
+  - `CSTORE_COST_GEMINI_PROMPT_PER_1M`, `CSTORE_COST_GEMINI_COMPLETION_PER_1M`
+  - `CSTORE_COST_OPENROUTER_PROMPT_PER_1M`, `CSTORE_COST_OPENROUTER_COMPLETION_PER_1M`
+- If rates or usage breakdown are missing, cost is returned as `null` (never fabricated).
+
 ### Relevant API endpoints
 
 | Method   | Path                         | Purpose                                                                     |
@@ -151,6 +229,10 @@ Pollinations reads `CSTORE_POLLINATIONS_URL` (default
 | `DELETE` | `/api/keys`                  | `{provider}` — remove                                                       |
 | `GET`    | `/api/qwen/status`           | Ollama reachability + installed qwen tags                                   |
 | `GET`    | `/api/pollinations/status`   | Pollinations reachability + anonymous-tier models                           |
+| `GET`    | `/api/health`                | Sidecar availability probe used by the UI refresh path                      |
+| `POST`   | `/api/generate-starters`     | `{count, seed?, checkpoint?, max_tokens?}` — make multiple 1.5s starter children |
+| `POST`   | `/api/generate-children`     | `{source_run_id, count, note_duration?, note_mode?, note_range_mode?, note_low_midi?, note_high_midi?}` — derive classic children |
+| `POST`   | `/api/generate-children-llm` | `{source_run_id, count, provider, model, think?, variation_temperature?}` — derive LLM children variants |
 | `POST`   | `/api/edit`                  | `{run_id, provider, model, instruction, think?}` — LLM edit, returns a new run |
 | `POST`   | `/api/render`                | `{csd, derived_from?}` — render hand-edited source, returns a new run       |
 | `POST`   | `/api/favorite`              | `{run_id, favorite?}` — pin/unpin in the Library (toggles if `favorite` omitted) |
@@ -172,7 +254,11 @@ The default checkpoint is `Cstore_V1.0.2/best`, set in `server/app.py`.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET`  | `/` | Health / endpoint index |
-| `POST` | `/api/generate` | Draft `.csd` + render `.wav`. Body: `{ seed?, checkpoint? }` |
+| `POST` | `/api/generate` | Draft `.csd` + render `.wav`. Body: `{ seed?, checkpoint?, max_tokens?, note_duration?, note_mode?, note_range_mode?, note_low_midi?, note_high_midi? }` |
+| `POST` | `/api/generate-starters` | Draft multiple short starter children. Body: `{ count, seed?, checkpoint?, max_tokens?, note_duration?, note_mode?, note_range_mode?, note_low_midi?, note_high_midi? }` |
+| `POST` | `/api/generate-children` | Derive classic children from a selected run. Body: `{ source_run_id, count, note_duration?, note_mode?, note_range_mode?, note_low_midi?, note_high_midi? }` |
+| `POST` | `/api/generate-children-llm` | Derive LLM children variants. Body: `{ source_run_id, count, provider, model, think?, variation_temperature? }` |
+| `GET`  | `/api/health` | Lightweight backend health probe |
 | `GET`  | `/api/list` | List completed runs (+ pinned favourites) |
 | `GET`  | `/api/console` | Live console ring buffer (polled by the web terminal) |
 | `GET`  | `/api/models` | Discoverable checkpoints under `model/checkpoints/` |
@@ -183,6 +269,12 @@ The default checkpoint is `Cstore_V1.0.2/best`, set in `server/app.py`.
 | `POST` | `/api/favorite` | Toggle a run's favourite flag |
 | `GET`  | `/generated/<run_id>/output.csd` | Source download |
 | `GET`  | `/generated/<run_id>/output.wav` | Rendered audio |
+
+## Global reverb (playback)
+
+The monitor panel exposes a **reverb** wet-mix control (`0..1`) that applies at
+playback time in the WebAudio graph. It is global for all loaded runs (base,
+starter, and child), and does not rewrite the underlying `.csd`.
 
 ## Production build
 

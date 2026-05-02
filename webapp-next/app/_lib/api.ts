@@ -12,6 +12,63 @@ export type GenerateResponse = {
   checkpoint?: string;
 };
 
+export type NoteMode = "single" | "arpeggio" | "chord";
+export type NoteRangeMode = "auto" | "manual";
+export type StarterType = NoteMode;
+
+export type AudioSafety = {
+  applied: boolean;
+  peak_before: number;
+  peak_after: number;
+  rms_before: number;
+  rms_after: number;
+  gain: number;
+};
+
+export type StarterChild = {
+  csd: string;
+  run_id: string;
+  csd_url: string;
+  wav_url: string;
+  starter_type: StarterType;
+  note_mode?: NoteMode;
+  child_index: number;
+  duration_sec: number;
+  derived_from?: string;
+};
+
+export type StarterBatchResponse = {
+  success: true;
+  count: number;
+  duration_sec: number;
+  note_mode?: NoteMode;
+  checkpoint?: string;
+  starters: StarterChild[];
+};
+
+export type ChildrenResponse = {
+  success: true;
+  count: number;
+  duration_sec: number;
+  note_mode: NoteMode;
+  derived_from: string;
+  children: StarterChild[];
+};
+
+export type LlmChildrenResponse = {
+  success: true;
+  count: number;
+  derived_from: string;
+  provider: LlmProvider;
+  model: string;
+  variation_tier?: "low" | "medium" | "high";
+  variation_mode?: string;
+  variation_temperature?: number;
+  usage?: LlmUsage;
+  cost?: LlmCost;
+  children: StarterChild[];
+};
+
 export type ModelEntry = {
   path: string; // relative label, e.g. "Cstore_V1.0.1/best"
   absolute: string;
@@ -39,15 +96,28 @@ export type RunEntry = {
 };
 
 export type RunMeta = {
-  kind?: "edit" | "manual_edit";
+  kind?: "edit" | "manual_edit" | "starter" | "child";
   derived_from?: string;
   provider?: LlmProvider;
   model?: string;
   instruction?: string;
+  starter_type?: StarterType;
+  note_mode?: NoteMode;
+  parent_seed?: number;
+  seed?: number;
+  child_index?: number;
+  duration_sec?: number;
+  max_tokens_requested?: number;
   render_ok?: boolean;
+  audio_safety?: AudioSafety;
   /** Set by the user via the star button in the library. Persisted in
    *  meta.json alongside any existing edit/manual_edit provenance. */
   favorite?: boolean;
+  llm_usage?: LlmUsage;
+  llm_cost?: LlmCost;
+  llm_variation_tier?: "low" | "medium" | "high";
+  llm_variation_mode?: string;
+  llm_variation_temperature?: number;
 };
 
 export type RunEntryWithMeta = RunEntry & { meta?: RunMeta };
@@ -73,7 +143,7 @@ export type ConsoleResponse = {
 };
 
 /** Providers that require a user-supplied API key. */
-export type KeyProvider = "openai" | "anthropic" | "gemini";
+export type KeyProvider = "openai" | "anthropic" | "gemini" | "openrouter";
 /** All providers the backend's /api/edit endpoint accepts. `qwen` runs on a
  *  local Ollama instance and is keyless. `pollinations` calls a free public
  *  anonymous-tier endpoint at text.pollinations.ai (GPT-OSS-20B, ~15s rate
@@ -107,6 +177,18 @@ export type PollinationsStatus = {
   rate_limit_seconds?: number;
 };
 
+export type LlmUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+};
+
+export type LlmCost = {
+  estimated_usd?: number | null;
+  estimated_source?: string;
+  free_tier?: boolean;
+};
+
 export type EditResponse = {
   success: true;
   csd: string;
@@ -117,6 +199,15 @@ export type EditResponse = {
   provider: LlmProvider;
   model: string;
   instruction: string;
+  usage?: LlmUsage;
+  cost?: LlmCost;
+};
+
+export type ServiceHealth = {
+  service?: string;
+  ui?: string;
+  ready?: boolean;
+  endpoints?: string[];
 };
 
 export type RenderResponse = {
@@ -129,11 +220,26 @@ export type RenderResponse = {
 };
 
 export async function generate(
-  opts: { seed?: number; checkpoint?: string } = {}
+  opts: {
+    seed?: number;
+    checkpoint?: string;
+    max_tokens?: number;
+    note_duration?: number;
+    note_mode?: NoteMode;
+    note_range_mode?: NoteRangeMode;
+    note_low_midi?: number;
+    note_high_midi?: number;
+  } = {}
 ): Promise<GenerateResponse> {
   const payload: Record<string, unknown> = {};
   if (opts.seed != null) payload.seed = opts.seed;
   if (opts.checkpoint) payload.checkpoint = opts.checkpoint;
+  if (opts.max_tokens != null) payload.max_tokens = opts.max_tokens;
+  if (opts.note_duration != null) payload.note_duration = opts.note_duration;
+  if (opts.note_mode) payload.note_mode = opts.note_mode;
+  if (opts.note_range_mode) payload.note_range_mode = opts.note_range_mode;
+  if (opts.note_low_midi != null) payload.note_low_midi = opts.note_low_midi;
+  if (opts.note_high_midi != null) payload.note_high_midi = opts.note_high_midi;
   const res = await fetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -147,6 +253,115 @@ export async function generate(
     // leave as default
   }
 
+  if (!res.ok || !("success" in data) || !data.success) {
+    const msg =
+      "error" in data && data.error ? data.error : `Request failed (${res.status})`;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+export async function generateStarters(
+  opts: {
+    count: number;
+    seed?: number;
+    checkpoint?: string;
+    max_tokens?: number;
+    note_duration?: number;
+    note_mode?: NoteMode;
+    note_range_mode?: NoteRangeMode;
+    note_low_midi?: number;
+    note_high_midi?: number;
+  }
+): Promise<StarterBatchResponse> {
+  const payload: Record<string, unknown> = { count: opts.count };
+  if (opts.seed != null) payload.seed = opts.seed;
+  if (opts.checkpoint) payload.checkpoint = opts.checkpoint;
+  if (opts.max_tokens != null) payload.max_tokens = opts.max_tokens;
+  if (opts.note_duration != null) payload.note_duration = opts.note_duration;
+  if (opts.note_mode) payload.note_mode = opts.note_mode;
+  if (opts.note_range_mode) payload.note_range_mode = opts.note_range_mode;
+  if (opts.note_low_midi != null) payload.note_low_midi = opts.note_low_midi;
+  if (opts.note_high_midi != null) payload.note_high_midi = opts.note_high_midi;
+  const res = await fetch("/api/generate-starters", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  let data: StarterBatchResponse | GenerateError = { error: "" } as GenerateError;
+  try {
+    data = await res.json();
+  } catch {
+    // leave as default
+  }
+
+  if (!res.ok || !("success" in data) || !data.success) {
+    const msg =
+      "error" in data && data.error ? data.error : `Request failed (${res.status})`;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+export async function generateChildren(opts: {
+  source_run_id: string;
+  count: number;
+  note_duration?: number;
+  note_mode?: NoteMode;
+  note_range_mode?: NoteRangeMode;
+  note_low_midi?: number;
+  note_high_midi?: number;
+}): Promise<ChildrenResponse> {
+  const payload: Record<string, unknown> = {
+    source_run_id: opts.source_run_id,
+    count: opts.count,
+  };
+  if (opts.note_duration != null) payload.note_duration = opts.note_duration;
+  if (opts.note_mode) payload.note_mode = opts.note_mode;
+  if (opts.note_range_mode) payload.note_range_mode = opts.note_range_mode;
+  if (opts.note_low_midi != null) payload.note_low_midi = opts.note_low_midi;
+  if (opts.note_high_midi != null) payload.note_high_midi = opts.note_high_midi;
+  const res = await fetch("/api/generate-children", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  let data: ChildrenResponse | GenerateError = { error: "" } as GenerateError;
+  try {
+    data = await res.json();
+  } catch {
+    // leave as default
+  }
+
+  if (!res.ok || !("success" in data) || !data.success) {
+    const msg =
+      "error" in data && data.error ? data.error : `Request failed (${res.status})`;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+export async function generateChildrenLlm(opts: {
+  source_run_id: string;
+  count: number;
+  provider: LlmProvider;
+  model: string;
+  think?: boolean;
+  variation_temperature?: number;
+}): Promise<LlmChildrenResponse> {
+  const res = await fetch("/api/generate-children-llm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  let data: LlmChildrenResponse | GenerateError = { error: "" } as GenerateError;
+  try {
+    data = await res.json();
+  } catch {
+    // leave as default
+  }
   if (!res.ok || !("success" in data) || !data.success) {
     const msg =
       "error" in data && data.error ? data.error : `Request failed (${res.status})`;
@@ -183,6 +398,12 @@ export async function fetchConsole(
   });
   if (!res.ok) throw new Error(`Console fetch failed (${res.status})`);
   return (await res.json()) as ConsoleResponse;
+}
+
+export async function fetchServiceHealth(): Promise<ServiceHealth> {
+  const res = await fetch("/api/health", { cache: "no-store" });
+  if (!res.ok) throw new Error(`Service check failed (${res.status})`);
+  return (await res.json()) as ServiceHealth;
 }
 
 export async function listModels(): Promise<ModelsResponse> {
@@ -339,6 +560,24 @@ export async function setFavorite(
     throw new Error(body.error || `Favorite toggle failed (${res.status})`);
   }
   return body.meta;
+}
+
+export async function deleteRun(runId: string): Promise<void> {
+  const res = await fetch("/api/run", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ run_id: runId }),
+  });
+  if (!res.ok) {
+    let msg = `Delete failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) msg = body.error;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
+  }
 }
 
 /**

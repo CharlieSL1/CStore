@@ -112,6 +112,16 @@ const PROVIDERS: ProviderDef[] = [
     keyHint: "AIza…",
     docs: "https://aistudio.google.com/app/apikey",
   },
+  {
+    id: "openrouter",
+    label: "OpenRouter · free",
+    // `openrouter/free` randomly routes across free models. Users can also
+    // select a pinned free variant by setting a specific `:free` model id.
+    models: ["openrouter/free", "qwen/qwen3-coder:free", "openai/gpt-oss-20b:free"],
+    local: false,
+    keyHint: "sk-or-…",
+    docs: "https://openrouter.ai/settings/keys",
+  },
 ];
 
 // Default selection when the dialog first opens. Kept as a module const so
@@ -587,6 +597,11 @@ ollama pull qwen2.5-coder:7b  # ~4 GB`}
                   get a key →
                 </a>
               </div>
+              <p className="mono border-b border-rule-2 px-3 py-2 text-[10px] text-ink-muted">
+                This provider requires your own paid key. The app stores only a
+                masked key status in UI and logs per-run token/cost metadata
+                when available.
+              </p>
 
               {keyStatus?.present ? (
                 <div className="flex items-center gap-3 px-3 py-3">

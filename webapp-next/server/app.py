@@ -9,7 +9,9 @@ The Next.js dev server (in the parent folder) proxies /api/* and /generated/*
 to this process via next.config.ts.
 """
 import json
+import math
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -17,6 +19,7 @@ import sys
 import threading
 import time
 import uuid
+import wave
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +42,31 @@ MODEL_ROOT = PROJECT_ROOT / "model" / "checkpoints"
 # Rendered outputs now live inside the Next.js project so everything is in one tree.
 GENERATED_DIR = WEBAPP_DIR / "generated"
 MAX_GENERATE_ATTEMPTS = 80  # Watchdog: retry until audio has audible content (RMS check)
+PROMPT = "<CsoundSynthesizer>"
+DEFAULT_MAX_NEW_TOKENS = 400
+MIN_NEW_TOKENS = 100
+MIN_REQUESTED_MAX_TOKENS = 100
+MAX_REQUESTED_MAX_TOKENS = 500
+STARTER_DURATION_SEC = 1.5
+MIN_NOTE_DURATION_SEC = 0.1
+MAX_NOTE_DURATION_SEC = 10.0
+MIN_NOTE_MIDI = 24
+MAX_NOTE_MIDI = 108
+DEFAULT_STARTER_COUNT = 6
+MAX_STARTER_COUNT = 12
+MAX_LLM_CHILD_ATTEMPTS = 3
+NOTE_MODES = ("single", "arpeggio", "chord")
+SAFE_PEAK_TARGET = 0.82
+SAFE_RMS_TARGET = 0.25
+
+
+def llm_var_profile(variation_temp: float) -> tuple[str, str, float]:
+    """Map slider [0..1] to (tier, prompt mode, provider temperature)."""
+    if variation_temp <= 0.33:
+        return ("low", "subtle", 0.25)
+    if variation_temp <= 0.66:
+        return ("medium", "moderate", 0.5)
+    return ("high", "aggressive-style-switch", 0.8)
 
 # No static_folder: the UI is served by Next.js (localhost:3000), not Flask.
 app = Flask(__name__)
@@ -85,6 +113,35 @@ def log_console(level: str, text: str, run_id: str | None = None) -> None:
                 "run_id": run_id,
                 "text": raw_line.rstrip(),
             })
+
+
+def _valid_run_id(run_id: str | None) -> bool:
+    return bool(run_id) and ".." not in run_id and "/" not in run_id and "\\" not in run_id
+
+
+def _read_run_meta(run_id: str) -> dict:
+    meta_path = GENERATED_DIR / run_id / "meta.json"
+    if not meta_path.exists():
+        return {}
+    try:
+        loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
+    except (OSError, ValueError):
+        log_console("warn", "could not parse existing meta.json", run_id=run_id)
+        return {}
+
+
+def _write_run_meta(run_id: str, meta: dict) -> None:
+    meta_path = GENERATED_DIR / run_id / "meta.json"
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _merge_run_meta(run_id: str, patch: dict) -> dict:
+    meta = _read_run_meta(run_id)
+    meta.update(patch)
+    _write_run_meta(run_id, meta)
+    return meta
 
 
 def console_snapshot(since: int = 0, limit: int = 500) -> dict:
@@ -234,6 +291,341 @@ def repair_csd(text, original_score=None):
     return text
 
 
+def validate_max_tokens(raw: object, default: int = DEFAULT_MAX_NEW_TOKENS) -> int:
+    """Validate the user-facing generation budget before model-level clamping."""
+    if raw is None or raw == "":
+        return default
+    value = int(raw)
+    if value < MIN_REQUESTED_MAX_TOKENS or value > MAX_REQUESTED_MAX_TOKENS:
+        raise ValueError(
+            f"max_tokens must be between {MIN_REQUESTED_MAX_TOKENS} and {MAX_REQUESTED_MAX_TOKENS}"
+        )
+    return value
+
+
+def effective_generation_budget(model, prompt_token_count: int, requested_max_tokens: int) -> tuple[int, int]:
+    """Clamp requested output tokens to the model's total context window."""
+    context_limit = int(
+        getattr(model.config, "n_positions", None)
+        or getattr(model.config, "n_ctx", None)
+        or getattr(model.config, "max_position_embeddings", None)
+        or 512
+    )
+    available = max(1, context_limit - prompt_token_count)
+    return min(requested_max_tokens, available), context_limit
+
+
+def parse_i_statement(line: str) -> dict | None:
+    """Parse simple Csound i-statements while preserving p-fields for rewriting."""
+    stripped = line.strip()
+    m = re.match(r"^i\s*(\S+)\s+(.*)$", stripped, re.I)
+    if not m:
+        return None
+    fields = m.group(2).split()
+    if len(fields) < 2:
+        return None
+    return {"instr": m.group(1), "fields": fields}
+
+
+def format_i_statement(
+    parsed: dict,
+    start: float,
+    dur: float,
+    freq_ratio: float | None = None,
+    freq_override: float | None = None,
+) -> str:
+    fields = list(parsed["fields"])
+    fields[0] = f"{start:.3f}".rstrip("0").rstrip(".")
+    fields[1] = f"{dur:.3f}".rstrip("0").rstrip(".")
+    if len(fields) < 3:
+        fields.append("220")
+    if len(fields) >= 3:
+        if freq_override is not None:
+            fields[2] = f"{freq_override:.3f}".rstrip("0").rstrip(".")
+        elif freq_ratio is not None:
+            try:
+                freq = float(fields[2])
+                if 20 <= freq <= 5000:
+                    fields[2] = f"{freq * freq_ratio:.3f}".rstrip("0").rstrip(".")
+            except ValueError:
+                pass
+    return f"i {parsed['instr']} {' '.join(fields)}"
+
+
+def validate_note_duration(raw: object, default: float = STARTER_DURATION_SEC) -> float:
+    if raw is None or raw == "":
+        return default
+    value = float(raw)
+    if value < MIN_NOTE_DURATION_SEC or value > MAX_NOTE_DURATION_SEC:
+        raise ValueError(
+            f"note_duration must be between {MIN_NOTE_DURATION_SEC:g} and {MAX_NOTE_DURATION_SEC:g} seconds"
+        )
+    return value
+
+
+def validate_note_mode(raw: object, default: str = "single") -> str:
+    mode = (str(raw or default)).strip().lower()
+    aliases = {"tone": "single", "scale": "arpeggio"}
+    mode = aliases.get(mode, mode)
+    if mode not in NOTE_MODES:
+        raise ValueError(f"note_mode must be one of: {', '.join(NOTE_MODES)}")
+    return mode
+
+
+def validate_note_range_mode(raw: object, default: str = "auto") -> str:
+    mode = (str(raw or default)).strip().lower()
+    if mode not in ("auto", "manual"):
+        raise ValueError("note_range_mode must be one of: auto, manual")
+    return mode
+
+
+def validate_note_midi(raw: object, label: str, default: int) -> int:
+    if raw is None or raw == "":
+        return default
+    value = int(raw)
+    if value < MIN_NOTE_MIDI or value > MAX_NOTE_MIDI:
+        raise ValueError(
+            f"{label} must be between {MIN_NOTE_MIDI} and {MAX_NOTE_MIDI}"
+        )
+    return value
+
+
+def hz_to_midi(freq: float) -> int:
+    if freq <= 0:
+        return 57
+    midi = int(round(69 + 12 * (math.log(freq / 440.0, 2))))
+    return max(MIN_NOTE_MIDI, min(MAX_NOTE_MIDI, midi))
+
+
+def midi_to_hz(midi: int) -> float:
+    return 440.0 * (2 ** ((midi - 69) / 12))
+
+
+def pick_distinct_midis(
+    rng: random.Random, count: int, low_midi: int, high_midi: int
+) -> list[int]:
+    lo = max(MIN_NOTE_MIDI, min(MAX_NOTE_MIDI, low_midi))
+    hi = max(MIN_NOTE_MIDI, min(MAX_NOTE_MIDI, high_midi))
+    if lo > hi:
+        lo, hi = hi, lo
+    pool = list(range(lo, hi + 1))
+    if len(pool) >= count:
+        chosen = rng.sample(pool, count)
+    else:
+        chosen = [rng.choice(pool) for _ in range(count)]
+    return chosen
+
+
+def _min_adjacent_gap(midis: list[int]) -> int:
+    if len(midis) < 2:
+        return 12
+    ordered = sorted(midis)
+    return min(b - a for a, b in zip(ordered, ordered[1:]))
+
+
+def _total_span(midis: list[int]) -> int:
+    if not midis:
+        return 0
+    return max(midis) - min(midis)
+
+
+def pick_spread_midis(
+    rng: random.Random,
+    count: int,
+    low_midi: int,
+    high_midi: int,
+    min_gap: int,
+    min_span: int,
+) -> list[int]:
+    """Pick notes that are distinct *and* musically separated.
+
+    Falls back gracefully when the requested range is too narrow, but still
+    avoids duplicated MIDI notes.
+    """
+    lo = max(MIN_NOTE_MIDI, min(MAX_NOTE_MIDI, low_midi))
+    hi = max(MIN_NOTE_MIDI, min(MAX_NOTE_MIDI, high_midi))
+    if lo > hi:
+        lo, hi = hi, lo
+    width = hi - lo + 1
+    effective_gap = max(1, min(min_gap, width // max(1, count - 1)))
+    effective_span = max(1, min(min_span, max(1, width - 1)))
+
+    # Deterministic bounded search for a high-quality set first.
+    attempts = 96
+    for _ in range(attempts):
+        picked = pick_distinct_midis(rng, count, lo, hi)
+        if len(set(picked)) < count:
+            continue
+        if _min_adjacent_gap(picked) < effective_gap:
+            continue
+        if _total_span(picked) < effective_span:
+            continue
+        return picked
+
+    # Fallback: widest unique picks in range.
+    pool = list(range(lo, hi + 1))
+    rng.shuffle(pool)
+    picked = sorted(pool[: max(1, min(count, len(pool)))])
+    if len(picked) < count:
+        picked = pick_distinct_midis(rng, count, lo, hi)
+        picked = sorted(list(dict.fromkeys(picked)))
+        while len(picked) < count:
+            picked.append(rng.randint(lo, hi))
+            picked = sorted(list(dict.fromkeys(picked)))
+    return picked[:count]
+
+
+def format_float(value: float) -> str:
+    return f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def apply_starter_score(
+    csd_text: str,
+    note_mode: str,
+    duration: float = STARTER_DURATION_SEC,
+    child_index: int = 0,
+    note_range_mode: str = "auto",
+    note_low_midi: int = 48,
+    note_high_midi: int = 72,
+    rng_seed: int | None = None,
+) -> str:
+    """Rewrite the score into a short audition: single note, arpeggio, or chord."""
+    m = re.search(r"<CsScore>\s*(.*?)\s*</CsScore>", csd_text, re.DOTALL | re.I)
+    if not m:
+        return csd_text
+
+    note_mode = validate_note_mode(note_mode)
+    raw_lines = [line.strip() for line in m.group(1).splitlines() if line.strip()]
+    f_lines = [line for line in raw_lines if re.match(r"^f\s*\d+", line, re.I)]
+    first_i = next((parse_i_statement(line) for line in raw_lines if parse_i_statement(line)), None)
+    if first_i is None:
+        first_i = {"instr": "1", "fields": ["0", format_float(duration)]}
+
+    try:
+        base_freq = float(first_i["fields"][2]) if len(first_i["fields"]) >= 3 else 220.0
+    except (ValueError, TypeError):
+        base_freq = 220.0
+    note_range_mode = validate_note_range_mode(note_range_mode)
+    if note_range_mode == "auto":
+        base_midi = hz_to_midi(base_freq)
+        # Wide default spread: roughly two octaves and change.
+        low_midi = max(MIN_NOTE_MIDI, base_midi - 14)
+        high_midi = min(MAX_NOTE_MIDI, base_midi + 14)
+    else:
+        low_midi = min(note_low_midi, note_high_midi)
+        high_midi = max(note_low_midi, note_high_midi)
+    if low_midi == high_midi:
+        high_midi = min(MAX_NOTE_MIDI, low_midi + 1)
+
+    seed_base = rng_seed if rng_seed is not None else 0
+    rng = random.Random(seed_base + child_index * 7919 + 17)
+    if note_mode == "arpeggio":
+        picked = pick_spread_midis(
+            rng,
+            count=4,
+            low_midi=low_midi,
+            high_midi=high_midi,
+            min_gap=3,
+            min_span=9,
+        )
+        rng.shuffle(picked)
+        step = duration / len(picked)
+        score_lines = [
+            format_i_statement(first_i, i * step, step, freq_override=midi_to_hz(midi))
+            for i, midi in enumerate(picked)
+        ]
+    elif note_mode == "chord":
+        picked = sorted(
+            pick_spread_midis(
+                rng,
+                count=3,
+                low_midi=low_midi,
+                high_midi=high_midi,
+                min_gap=4,
+                min_span=10,
+            )
+        )
+        score_lines = [
+            format_i_statement(first_i, 0, duration, freq_override=midi_to_hz(midi))
+            for midi in picked
+        ]
+    else:
+        picked = pick_distinct_midis(rng, 1, low_midi, high_midi)
+        score_lines = [format_i_statement(first_i, 0, duration, freq_override=midi_to_hz(picked[0]))]
+
+    new_score = "\n".join(f_lines + score_lines + ["e"])
+    return csd_text[: m.start()] + f"<CsScore>\n{new_score}\n</CsScore>" + csd_text[m.end() :]
+
+
+def apply_output_envelope(csd_text: str) -> str:
+    """Add a short Csound 6-safe linen envelope before simple output opcodes."""
+    lines = csd_text.splitlines()
+    out_lines: list[str] = []
+    in_instr = False
+    instr_lines: list[str] = []
+
+    def flush_instr(block: list[str]) -> list[str]:
+        body = "\n".join(block)
+        if re.search(r"\b(linen|adsr|madsr|linseg|expseg)\b", body, re.I):
+            return block
+        if not re.search(r"^\s*outs?\s+", body, re.I | re.M):
+            return block
+
+        changed: list[str] = []
+        env_inserted = False
+        for line in block:
+            stripped = line.lstrip()
+            indent = line[: len(line) - len(stripped)]
+            if stripped.startswith(";"):
+                changed.append(line)
+                continue
+
+            comment = ""
+            code = line
+            if ";" in line:
+                code, comment = line.split(";", 1)
+                comment = ";" + comment
+
+            outs_match = re.match(r"^(\s*)outs\s+(.+?)\s*,\s*(.+?)\s*$", code, re.I)
+            out_match = re.match(r"^(\s*)out\s+(.+?)\s*$", code, re.I)
+            if outs_match or out_match:
+                if not env_inserted:
+                    changed.append(f"{indent}kCStoreEnv linen 1, 0.01, p3, 0.05")
+                    env_inserted = True
+                if outs_match:
+                    left = outs_match.group(2).strip()
+                    right = outs_match.group(3).strip()
+                    changed.append(
+                        f"{indent}outs ({left}) * kCStoreEnv, ({right}) * kCStoreEnv{(' ' + comment) if comment else ''}"
+                    )
+                else:
+                    sig = out_match.group(2).strip()
+                    changed.append(f"{indent}out ({sig}) * kCStoreEnv{(' ' + comment) if comment else ''}")
+                continue
+            changed.append(line)
+        return changed
+
+    for line in lines:
+        if re.match(r"\s*instr\b", line):
+            if in_instr:
+                out_lines.extend(flush_instr(instr_lines))
+                instr_lines = []
+            in_instr = True
+            instr_lines.append(line)
+            continue
+        if in_instr:
+            instr_lines.append(line)
+            if re.match(r"\s*endin\b", line):
+                out_lines.extend(flush_instr(instr_lines))
+                instr_lines = []
+                in_instr = False
+            continue
+        out_lines.append(line)
+    if instr_lines:
+        out_lines.extend(flush_instr(instr_lines))
+    return "\n".join(out_lines) + ("\n" if csd_text.endswith("\n") else "")
+
+
 RMS_THRESHOLD = 0.0001
 MAX_SAMPLE_THRESHOLD = 1e-6
 
@@ -273,6 +665,89 @@ def wav_has_sound(wav_path: Path) -> bool:
             return False
     except Exception:
         return False
+
+
+def protect_wav_output(wav_path: Path) -> dict:
+    """Keep rendered WAVs in a conservative peak/RMS range for downloads and playback."""
+    run_id = wav_path.parent.name
+    result = {
+        "applied": False,
+        "peak_before": 0.0,
+        "peak_after": 0.0,
+        "rms_before": 0.0,
+        "rms_after": 0.0,
+        "gain": 1.0,
+    }
+    try:
+        import numpy as np
+
+        with wave.open(str(wav_path), "rb") as reader:
+            params = reader.getparams()
+            frames = reader.readframes(params.nframes)
+        if not frames or params.nframes == 0:
+            return result
+
+        if params.sampwidth == 1:
+            raw = np.frombuffer(frames, dtype=np.uint8).astype(np.float64)
+            samples = (raw - 128.0) / 128.0
+            max_int = 127.0
+        elif params.sampwidth == 2:
+            raw = np.frombuffer(frames, dtype="<i2").astype(np.float64)
+            samples = raw / 32768.0
+            max_int = 32767.0
+        elif params.sampwidth == 4:
+            raw = np.frombuffer(frames, dtype="<i4").astype(np.float64)
+            samples = raw / 2147483648.0
+            max_int = 2147483647.0
+        else:
+            log_console("warn", f"safe gain skipped · unsupported {params.sampwidth * 8}-bit wav", run_id=run_id)
+            return result
+
+        peak_before = float(np.max(np.abs(samples))) if samples.size else 0.0
+        rms_before = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
+        gain = 1.0
+        if peak_before > SAFE_PEAK_TARGET:
+            gain = min(gain, SAFE_PEAK_TARGET / peak_before)
+        if rms_before > SAFE_RMS_TARGET:
+            gain = min(gain, SAFE_RMS_TARGET / rms_before)
+
+        processed = samples
+        if gain < 1.0:
+            processed = np.clip(samples * gain, -SAFE_PEAK_TARGET, SAFE_PEAK_TARGET)
+            if params.sampwidth == 1:
+                encoded = np.clip((processed * 128.0) + 128.0, 0, 255).astype(np.uint8)
+            elif params.sampwidth == 2:
+                encoded = np.clip(processed * max_int, -32768, 32767).astype("<i2")
+            else:
+                encoded = np.clip(processed * max_int, -2147483648, 2147483647).astype("<i4")
+            with wave.open(str(wav_path), "wb") as writer:
+                writer.setparams(params)
+                writer.writeframes(encoded.tobytes())
+            result["applied"] = True
+
+        peak_after = float(np.max(np.abs(processed))) if processed.size else 0.0
+        rms_after = float(np.sqrt(np.mean(processed * processed))) if processed.size else 0.0
+        result.update({
+            "peak_before": peak_before,
+            "peak_after": peak_after,
+            "rms_before": rms_before,
+            "rms_after": rms_after,
+            "gain": gain,
+        })
+        log_console(
+            "info",
+            (
+                "safe gain · "
+                f"peak {peak_before:.3f}->{peak_after:.3f} · "
+                f"rms {rms_before:.3f}->{rms_after:.3f} · "
+                f"gain {gain:.3f}"
+            ),
+            run_id=run_id,
+        )
+        return result
+    except Exception as e:
+        log_console("warn", f"safe gain skipped · {str(e)[:160]}", run_id=run_id)
+        return result
 
 
 def render_csd_to_wav(csd_path: Path, wav_path: Path, timeout: int = 15) -> bool:
@@ -325,6 +800,11 @@ def render_csd_to_wav(csd_path: Path, wav_path: Path, timeout: int = 15) -> bool
             f"csound produced no / tiny wav ({wav_path.stat().st_size if wav_path.exists() else 0} bytes)",
             run_id=run_id,
         )
+        return False
+    audio_safety = protect_wav_output(wav_path)
+    _merge_run_meta(run_id, {"audio_safety": audio_safety})
+    if not wav_has_sound(wav_path):
+        log_console("warn", "rendered wav did not pass audible-content check", run_id=run_id)
         return False
     log_console(
         "ok",
@@ -388,7 +868,18 @@ def load_model(checkpoint: Path | None = None):
     return _model, _tokenizer
 
 
-def generate_one_sample(seed: int = None, checkpoint: Path | None = None):
+def generate_one_sample(
+    seed: int = None,
+    checkpoint: Path | None = None,
+    max_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+    note_mode: str | None = None,
+    note_duration: float = STARTER_DURATION_SEC,
+    note_range_mode: str = "auto",
+    note_low_midi: int = 48,
+    note_high_midi: int = 72,
+    child_index: int = 0,
+    meta: dict | None = None,
+):
     """Generate one CSD sample, render to WAV, save both. Returns (csd_text, csd_path, wav_path) or (None, None, None)."""
     import torch
 
@@ -400,20 +891,28 @@ def generate_one_sample(seed: int = None, checkpoint: Path | None = None):
 
     torch.manual_seed(seed)
     t0 = time.time()
-    log_console("info", f"sampling · seed={seed} · T=0.8 top_p=0.9 max_new=400")
 
-    PROMPT = "<CsoundSynthesizer>"
-    MAX_NEW_TOKENS = 400
-    MIN_NEW_TOKENS = 100
     TEMPERATURE = 0.8
     TOP_P = 0.9
 
     inputs = tokenizer(PROMPT, return_tensors="pt").to(device)
+    prompt_tokens = int(inputs["input_ids"].shape[-1])
+    effective_max_tokens, context_limit = effective_generation_budget(
+        model, prompt_tokens, max_tokens
+    )
+    effective_min_tokens = min(MIN_NEW_TOKENS, effective_max_tokens)
+    log_console(
+        "info",
+        (
+            f"sampling · seed={seed} · T=0.8 top_p=0.9 "
+            f"max_new={effective_max_tokens}/{context_limit}"
+        ),
+    )
     with torch.no_grad():
         out = model.generate(
             **inputs,
-            max_new_tokens=MAX_NEW_TOKENS,
-            min_new_tokens=MIN_NEW_TOKENS,
+            max_new_tokens=effective_max_tokens,
+            min_new_tokens=effective_min_tokens,
             do_sample=True,
             temperature=TEMPERATURE,
             top_p=TOP_P,
@@ -428,6 +927,18 @@ def generate_one_sample(seed: int = None, checkpoint: Path | None = None):
     if gen_text is None:
         log_console("warn", "repair_csd returned None — malformed .csd, discarding")
         return None, None, None
+    if note_mode:
+        gen_text = apply_starter_score(
+            gen_text,
+            note_mode=note_mode,
+            duration=note_duration,
+            note_range_mode=note_range_mode,
+            note_low_midi=note_low_midi,
+            note_high_midi=note_high_midi,
+            rng_seed=seed,
+            child_index=child_index,
+        )
+    gen_text = apply_output_envelope(gen_text)
     log_console(
         "info",
         f"sampled {len(gen_text)} chars in {time.time() - t0:.2f}s",
@@ -441,6 +952,11 @@ def generate_one_sample(seed: int = None, checkpoint: Path | None = None):
     csd_path = run_dir / "output.csd"
     wav_path = run_dir / "output.wav"
     csd_path.write_text(gen_text, encoding="utf-8")
+    if meta:
+        (run_dir / "meta.json").write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
     log_console("info", f"wrote {csd_path.relative_to(WEBAPP_DIR)}", run_id=run_id)
 
     if not render_csd_to_wav(csd_path, wav_path):
@@ -455,7 +971,18 @@ def generate_one_sample(seed: int = None, checkpoint: Path | None = None):
     return gen_text, str(csd_path), str(wav_path)
 
 
-def generate_until_audio_success(seed: int = None, checkpoint: Path | None = None):
+def generate_until_audio_success(
+    seed: int = None,
+    checkpoint: Path | None = None,
+    max_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+    note_mode: str | None = None,
+    note_duration: float = STARTER_DURATION_SEC,
+    note_range_mode: str = "auto",
+    note_low_midi: int = 48,
+    note_high_midi: int = 72,
+    child_index: int = 0,
+    meta: dict | None = None,
+):
     """Watchdog: retry until audio renders successfully. Only returns when both CSD and WAV exist."""
     base_seed = seed if seed is not None else int(datetime.now().timestamp() * 1000) % (2**32)
     log_console(
@@ -465,7 +992,19 @@ def generate_until_audio_success(seed: int = None, checkpoint: Path | None = Non
     for attempt in range(1, MAX_GENERATE_ATTEMPTS + 1):
         try_seed = base_seed + attempt * 12345
         log_console("info", f"attempt {attempt}/{MAX_GENERATE_ATTEMPTS} · seed={try_seed}")
-        csd_text, csd_path, wav_path = generate_one_sample(seed=try_seed, checkpoint=checkpoint)
+        attempt_meta = {**meta, "seed": try_seed} if meta else None
+        csd_text, csd_path, wav_path = generate_one_sample(
+            seed=try_seed,
+            checkpoint=checkpoint,
+            max_tokens=max_tokens,
+            note_mode=note_mode,
+            note_duration=note_duration,
+            note_range_mode=note_range_mode,
+            note_low_midi=note_low_midi,
+            note_high_midi=note_high_midi,
+            child_index=child_index,
+            meta=attempt_meta,
+        )
         if wav_path is not None:
             log_console(
                 "ok",
@@ -485,11 +1024,16 @@ def index():
         "ui": "http://localhost:3000",
         "endpoints": [
             "POST /api/generate",
+            "POST /api/generate-starters",
+            "POST /api/generate-children",
+            "POST /api/generate-children-llm",
+            "GET  /api/health",
             "GET  /api/list",
             "GET  /api/console",
             "GET  /api/models",
             "GET  /api/model",
             "POST /api/model",
+            "DELETE /api/run",
             "GET  /api/qwen/status",
             "GET  /api/pollinations/status",
             "POST /api/edit",
@@ -500,12 +1044,23 @@ def index():
     })
 
 
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    """Lightweight service health for UI refresh/reconnect checks."""
+    return jsonify({
+        "service": "cstore-backend",
+        "ui": "http://localhost:3000",
+        "ready": True,
+    })
+
+
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
     """Generate CSD + WAV. Watchdog: only returns when audio renders successfully.
 
     Accepts optional body fields:
       - seed: int
+      - max_tokens: int — requested generation budget, clamped to the model context.
       - checkpoint: str — relative (e.g. "Cstore_V1.0.1/best") or absolute path.
         When supplied, the active model is switched to this checkpoint first.
     """
@@ -514,6 +1069,14 @@ def api_generate():
         seed = data.get("seed")
         if seed is not None:
             seed = int(seed)
+        max_tokens = validate_max_tokens(data.get("max_tokens"))
+        note_duration = validate_note_duration(data.get("note_duration"))
+        note_mode = validate_note_mode(data.get("note_mode"))
+        note_range_mode = validate_note_range_mode(data.get("note_range_mode"))
+        note_low_midi = validate_note_midi(data.get("note_low_midi"), "note_low_midi", 48)
+        note_high_midi = validate_note_midi(data.get("note_high_midi"), "note_high_midi", 72)
+        if note_low_midi > note_high_midi:
+            note_low_midi, note_high_midi = note_high_midi, note_low_midi
 
         checkpoint = None
         ckpt_raw = data.get("checkpoint")
@@ -521,7 +1084,14 @@ def api_generate():
             checkpoint = resolve_checkpoint(str(ckpt_raw))
 
         csd_text, csd_path, wav_path = generate_until_audio_success(
-            seed=seed, checkpoint=checkpoint
+            seed=seed,
+            checkpoint=checkpoint,
+            max_tokens=max_tokens,
+            note_mode=note_mode,
+            note_duration=note_duration,
+            note_range_mode=note_range_mode,
+            note_low_midi=note_low_midi,
+            note_high_midi=note_high_midi,
         )
 
         if csd_text is None or wav_path is None:
@@ -548,6 +1118,527 @@ def api_generate():
         err = str(e)
         if not err or len(err) > 200:
             err = "Generation failed"
+        return jsonify({"error": err}), 500
+
+
+@app.route("/api/generate-starters", methods=["POST"])
+def api_generate_starters():
+    """Generate several short, audible 1.5-second starter children."""
+    try:
+        data = request.get_json() or {}
+        seed = data.get("seed")
+        if seed is not None:
+            seed = int(seed)
+        base_seed = seed if seed is not None else int(datetime.now().timestamp() * 1000) % (2**32)
+
+        raw_count = data.get("count", DEFAULT_STARTER_COUNT)
+        count = DEFAULT_STARTER_COUNT if raw_count in (None, "") else int(raw_count)
+        if count < 1 or count > MAX_STARTER_COUNT:
+            return jsonify({"error": f"count must be between 1 and {MAX_STARTER_COUNT}"}), 400
+        max_tokens = validate_max_tokens(data.get("max_tokens"))
+        note_duration = validate_note_duration(data.get("note_duration"))
+        note_mode = validate_note_mode(data.get("note_mode"))
+        note_range_mode = validate_note_range_mode(data.get("note_range_mode"))
+        note_low_midi = validate_note_midi(data.get("note_low_midi"), "note_low_midi", 48)
+        note_high_midi = validate_note_midi(data.get("note_high_midi"), "note_high_midi", 72)
+        if note_low_midi > note_high_midi:
+            note_low_midi, note_high_midi = note_high_midi, note_low_midi
+
+        checkpoint = None
+        ckpt_raw = data.get("checkpoint")
+        if ckpt_raw:
+            checkpoint = resolve_checkpoint(str(ckpt_raw))
+
+        log_console(
+            "sys",
+            (
+                f"starter batch start · count={count} · mode={note_mode} "
+                f"· duration={note_duration}s · range={note_range_mode}:{note_low_midi}-{note_high_midi} "
+                f"· base_seed={base_seed}"
+            ),
+        )
+        starters = []
+        for child_index in range(count):
+            child_seed = base_seed + (child_index + 1) * 12345
+            meta = {
+                "kind": "starter",
+                "starter_type": note_mode,
+                "note_mode": note_mode,
+                "parent_seed": base_seed,
+                "seed": child_seed,
+                "child_index": child_index + 1,
+                "duration_sec": note_duration,
+                "max_tokens_requested": max_tokens,
+                "note_range_mode": note_range_mode,
+                "note_low_midi": note_low_midi,
+                "note_high_midi": note_high_midi,
+            }
+            csd_text, csd_path, wav_path = generate_until_audio_success(
+                seed=child_seed,
+                checkpoint=checkpoint,
+                max_tokens=max_tokens,
+                note_mode=note_mode,
+                note_duration=note_duration,
+                note_range_mode=note_range_mode,
+                note_low_midi=note_low_midi,
+                note_high_midi=note_high_midi,
+                child_index=child_index,
+                meta=meta,
+            )
+            if csd_text is None or wav_path is None:
+                return jsonify({
+                    "error": (
+                        f"Only generated {len(starters)}/{count} starters before "
+                        "the audio watchdog ran out of attempts."
+                    ),
+                    "starters": starters,
+                }), 500
+
+            run_id = Path(csd_path).parent.name
+            starters.append({
+                "csd": csd_text,
+                "run_id": run_id,
+                "csd_url": f"/generated/{run_id}/output.csd",
+                "wav_url": f"/generated/{run_id}/output.wav",
+                "starter_type": note_mode,
+                "note_mode": note_mode,
+                "child_index": child_index + 1,
+                "duration_sec": note_duration,
+                "note_range_mode": note_range_mode,
+                "note_low_midi": note_low_midi,
+                "note_high_midi": note_high_midi,
+            })
+
+        log_console("ok", f"starter batch done · {len(starters)}/{count} rendered")
+        return jsonify({
+            "success": True,
+            "count": len(starters),
+            "duration_sec": note_duration,
+            "note_mode": note_mode,
+            "checkpoint": str(_active_checkpoint),
+            "starters": starters,
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 503
+    except Exception as e:
+        err = str(e)
+        if not err or len(err) > 200:
+            err = "Starter generation failed"
+        return jsonify({"error": err}), 500
+
+
+@app.route("/api/generate-children", methods=["POST"])
+def api_generate_children():
+    """Create short children from a selected source run without calling the model."""
+    try:
+        data = request.get_json() or {}
+        source_run_id = (data.get("source_run_id") or "").strip()
+        if not _valid_run_id(source_run_id):
+            return jsonify({"error": "Invalid source_run_id"}), 400
+
+        source_dir = GENERATED_DIR / source_run_id
+        source_csd = source_dir / "output.csd"
+        if not source_csd.exists():
+            return jsonify({"error": f"Source CSD not found: {source_run_id}"}), 404
+
+        raw_count = data.get("count", DEFAULT_STARTER_COUNT)
+        count = DEFAULT_STARTER_COUNT if raw_count in (None, "") else int(raw_count)
+        if count < 1 or count > MAX_STARTER_COUNT:
+            return jsonify({"error": f"count must be between 1 and {MAX_STARTER_COUNT}"}), 400
+        note_duration = validate_note_duration(data.get("note_duration"))
+        note_mode = validate_note_mode(data.get("note_mode"))
+        note_range_mode = validate_note_range_mode(data.get("note_range_mode"))
+        note_low_midi = validate_note_midi(data.get("note_low_midi"), "note_low_midi", 48)
+        note_high_midi = validate_note_midi(data.get("note_high_midi"), "note_high_midi", 72)
+        if note_low_midi > note_high_midi:
+            note_low_midi, note_high_midi = note_high_midi, note_low_midi
+
+        source_text = source_csd.read_text(encoding="utf-8")
+        log_console(
+            "sys",
+            (
+                f"children start · source={source_run_id} · count={count} "
+                f"· mode={note_mode} · duration={note_duration}s "
+                f"· range={note_range_mode}:{note_low_midi}-{note_high_midi}"
+            ),
+        )
+
+        children = []
+        for child_index in range(count):
+            csd_text = apply_starter_score(
+                source_text,
+                note_mode=note_mode,
+                duration=note_duration,
+                child_index=child_index,
+                note_range_mode=note_range_mode,
+                note_low_midi=note_low_midi,
+                note_high_midi=note_high_midi,
+                rng_seed=sum(ord(ch) for ch in source_run_id),
+            )
+            csd_text = apply_output_envelope(csd_text)
+            new_run_id = (
+                datetime.now().strftime("%Y%m%d_%H%M%S")
+                + "_child_"
+                + uuid.uuid4().hex[:8]
+            )
+            run_dir = GENERATED_DIR / new_run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            csd_path = run_dir / "output.csd"
+            wav_path = run_dir / "output.wav"
+            csd_path.write_text(csd_text, encoding="utf-8")
+
+            meta = {
+                "kind": "child",
+                "derived_from": source_run_id,
+                "child_index": child_index + 1,
+                "note_mode": note_mode,
+                "starter_type": note_mode,
+                "duration_sec": note_duration,
+                "note_range_mode": note_range_mode,
+                "note_low_midi": note_low_midi,
+                "note_high_midi": note_high_midi,
+            }
+            _write_run_meta(new_run_id, meta)
+
+            if not render_csd_to_wav(csd_path, wav_path):
+                _merge_run_meta(new_run_id, {"render_ok": False})
+                return jsonify({
+                    "error": (
+                        f"Only generated {len(children)}/{count} children before "
+                        "a source-child render failed."
+                    ),
+                    "children": children,
+                }), 500
+
+            _merge_run_meta(new_run_id, {"render_ok": True})
+            children.append({
+                "csd": csd_text,
+                "run_id": new_run_id,
+                "csd_url": f"/generated/{new_run_id}/output.csd",
+                "wav_url": f"/generated/{new_run_id}/output.wav",
+                "starter_type": note_mode,
+                "note_mode": note_mode,
+                "child_index": child_index + 1,
+                "duration_sec": note_duration,
+                "derived_from": source_run_id,
+                "note_range_mode": note_range_mode,
+                "note_low_midi": note_low_midi,
+                "note_high_midi": note_high_midi,
+            })
+
+        log_console("ok", f"children done · {len(children)}/{count} rendered")
+        return jsonify({
+            "success": True,
+            "count": len(children),
+            "duration_sec": note_duration,
+            "note_mode": note_mode,
+            "derived_from": source_run_id,
+            "children": children,
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        err = str(e)
+        if not err or len(err) > 200:
+            err = "Child generation failed"
+        return jsonify({"error": err}), 500
+
+
+@app.route("/api/generate-children-llm", methods=["POST"])
+def api_generate_children_llm():
+    """Create child variants from a source run via the external LLM pipeline."""
+    try:
+        data = request.get_json() or {}
+        source_run_id = (data.get("source_run_id") or "").strip()
+        if not _valid_run_id(source_run_id):
+            return jsonify({"error": "Invalid source_run_id"}), 400
+
+        raw_count = data.get("count", DEFAULT_STARTER_COUNT)
+        count = DEFAULT_STARTER_COUNT if raw_count in (None, "") else int(raw_count)
+        if count < 1 or count > MAX_STARTER_COUNT:
+            return jsonify({"error": f"count must be between 1 and {MAX_STARTER_COUNT}"}), 400
+
+        provider = data.get("provider")
+        model = (data.get("model") or "").strip()
+        raw_think = data.get("think", True)
+        think = False if raw_think is False else True
+        raw_variation_temp = data.get("variation_temperature", 0.35)
+        variation_temp = float(raw_variation_temp)
+        if variation_temp < 0 or variation_temp > 1:
+            return jsonify({"error": "variation_temperature must be between 0 and 1"}), 400
+        if provider not in SUPPORTED_PROVIDERS:
+            return jsonify({"error": f"Unsupported provider: {provider}"}), 400
+        if not model:
+            return jsonify({"error": "Missing model name"}), 400
+
+        source_csd = GENERATED_DIR / source_run_id / "output.csd"
+        if not source_csd.exists():
+            return jsonify({"error": f"Source run not found: {source_run_id}"}), 404
+        original = source_csd.read_text(encoding="utf-8")
+
+        key: str | None = None
+        if provider in KEY_PROVIDERS:
+            keys = _load_keys()
+            key = keys.get(provider)
+            if not key:
+                return jsonify({
+                    "error": f"No API key stored for {provider}. Save one via /api/keys first.",
+                }), 401
+
+        variation_tier, variation_mode, provider_temperature = llm_var_profile(variation_temp)
+        prompt_templates = {
+            "low": [
+                "Make a small timbre adjustment but keep the same phrase and pacing.",
+                "Preserve structure while slightly reshaping envelope attack/decay.",
+                "Keep register mostly stable and apply light spectral color change.",
+            ],
+            "medium": [
+                "Shift register and articulation for a contrasting but still recognizable variant.",
+                "Rework envelope and rhythmic emphasis while preserving render-safe structure.",
+                "Alter spectral profile and density with moderate phrase-level changes.",
+            ],
+            "high": [
+                "Aggressive style switch: move the line to a clearly different register and phrase contour.",
+                "Aggressive style switch: strongly alter envelope, rhythmic articulation, and transient shape.",
+                "Aggressive style switch: produce a contrasting spectral profile (dark vs bright) with distinct pacing.",
+            ],
+        }
+        anti_similarity = {
+            "low": (
+                "Keep family resemblance to the mother while changing one primary dimension "
+                "(timbre OR envelope OR register)."
+            ),
+            "medium": (
+                "Avoid near-copying: change at least two dimensions among register, articulation, "
+                "spectral brightness, and note density."
+            ),
+            "high": (
+                "Do not stay close to the mother. Force clear divergence across register, "
+                "envelope shape, rhythmic articulation, and spectral profile while keeping strict "
+                "Csound syntax and render-safe score/orchestra structure."
+            ),
+        }
+        children = []
+        usage_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        usage_seen = {"prompt_tokens": False, "completion_tokens": False, "total_tokens": False}
+
+        def _accumulate_batch_usage(usage: dict | None) -> None:
+            if not usage:
+                return
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                v = usage.get(k)
+                if v is None:
+                    continue
+                try:
+                    usage_totals[k] += int(v)
+                    usage_seen[k] = True
+                except (TypeError, ValueError):
+                    continue
+
+        log_console(
+            "sys",
+            (
+                f"children llm start · source={source_run_id} · count={count} "
+                f"· {provider}/{model} · think={'on' if think else 'off'} "
+                f"· var={variation_temp:.2f} · tier={variation_tier}"
+            ),
+        )
+        for child_index in range(count):
+            base_instruction = prompt_templates[variation_tier][
+                child_index % len(prompt_templates[variation_tier])
+            ]
+            auto_instruction = (
+                f"{base_instruction} "
+                f"{anti_similarity[variation_tier]} "
+                "Return only one complete <CsoundSynthesizer> block that compiles in Csound 6."
+            )
+            rendered = False
+            last_failure = "unknown failure"
+            for attempt in range(1, MAX_LLM_CHILD_ATTEMPTS + 1):
+                attempt_instruction = auto_instruction
+                if attempt > 1:
+                    attempt_instruction += (
+                        " Keep edits minimal and strictly valid Csound 6 syntax "
+                        "so the file compiles and renders."
+                    )
+                user_msg = (
+                    f"Auto variation request ({child_index + 1}/{count}, attempt {attempt}/{MAX_LLM_CHILD_ATTEMPTS}):\n"
+                    f"{attempt_instruction}\n\n"
+                    f"Current .csd:\n{original}"
+                )
+                try:
+                    if provider == "qwen":
+                        raw, usage = _call_qwen(
+                            key,
+                            model,
+                            LLM_SYSTEM_PROMPT,
+                            user_msg,
+                            think=think,
+                            temperature=provider_temperature,
+                        )
+                    else:
+                        raw, usage = _LLM_DISPATCH[provider](
+                            key,
+                            model,
+                            LLM_SYSTEM_PROMPT,
+                            user_msg,
+                            temperature=provider_temperature,
+                        )
+                except Exception as e:
+                    last_failure = f"LLM call failed: {str(e)[:200]}"
+                    continue
+
+                new_csd = _extract_csd(raw)
+                if not new_csd:
+                    last_failure = "LLM did not return a valid CsoundSynthesizer block"
+                    continue
+                repaired = repair_csd(fix_common_model_errors(new_csd))
+                if repaired is None:
+                    last_failure = "LLM output could not be repaired into valid CSD"
+                    continue
+                new_csd = apply_output_envelope(repaired)
+                cost = _estimate_llm_cost(provider, usage)
+
+                new_run_id = (
+                    datetime.now().strftime("%Y%m%d_%H%M%S")
+                    + "_childllm_"
+                    + uuid.uuid4().hex[:8]
+                )
+                run_dir = GENERATED_DIR / new_run_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+                csd_path = run_dir / "output.csd"
+                wav_path = run_dir / "output.wav"
+                csd_path.write_text(new_csd, encoding="utf-8")
+
+                meta = {
+                    "kind": "child",
+                    "derived_from": source_run_id,
+                    "child_index": child_index + 1,
+                    "note_mode": "single",
+                    "starter_type": "single",
+                    "duration_sec": STARTER_DURATION_SEC,
+                    "provider": provider,
+                    "model": model,
+                    "instruction": auto_instruction,
+                    "llm_cost": cost,
+                    "llm_child_variant": True,
+                    "llm_child_attempt": attempt,
+                    "llm_variation_temperature": variation_temp,
+                    "llm_variation_tier": variation_tier,
+                    "llm_variation_mode": variation_mode,
+                }
+                if usage:
+                    meta["llm_usage"] = usage
+                _write_run_meta(new_run_id, meta)
+
+                if not render_csd_to_wav(csd_path, wav_path):
+                    _merge_run_meta(new_run_id, {"render_ok": False})
+                    last_failure = "csound render failed"
+                    continue
+
+                _merge_run_meta(new_run_id, {"render_ok": True})
+                _accumulate_batch_usage(usage)
+                children.append({
+                    "csd": new_csd,
+                    "run_id": new_run_id,
+                    "csd_url": f"/generated/{new_run_id}/output.csd",
+                    "wav_url": f"/generated/{new_run_id}/output.wav",
+                    "starter_type": "single",
+                    "note_mode": "single",
+                    "child_index": child_index + 1,
+                    "duration_sec": STARTER_DURATION_SEC,
+                    "derived_from": source_run_id,
+                })
+                rendered = True
+                break
+
+            if not rendered:
+                # Safety fallback: keep the batch usable even when the selected
+                # LLM repeatedly emits non-renderable CSD (common on free tiers).
+                fallback_csd = apply_starter_score(
+                    original,
+                    note_mode="chord" if variation_tier == "high" else "arpeggio",
+                    duration=STARTER_DURATION_SEC,
+                    child_index=child_index,
+                    note_range_mode="auto",
+                    rng_seed=sum(ord(ch) for ch in (source_run_id + variation_tier)),
+                )
+                fallback_csd = apply_output_envelope(fallback_csd)
+                fallback_run_id = (
+                    datetime.now().strftime("%Y%m%d_%H%M%S")
+                    + "_childllmfb_"
+                    + uuid.uuid4().hex[:8]
+                )
+                fallback_dir = GENERATED_DIR / fallback_run_id
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                fallback_csd_path = fallback_dir / "output.csd"
+                fallback_wav_path = fallback_dir / "output.wav"
+                fallback_csd_path.write_text(fallback_csd, encoding="utf-8")
+                fallback_meta = {
+                    "kind": "child",
+                    "derived_from": source_run_id,
+                    "child_index": child_index + 1,
+                    "note_mode": "chord" if variation_tier == "high" else "arpeggio",
+                    "starter_type": "chord" if variation_tier == "high" else "arpeggio",
+                    "duration_sec": STARTER_DURATION_SEC,
+                    "provider": provider,
+                    "model": model,
+                    "instruction": "auto child fallback variation",
+                    "llm_child_variant": True,
+                    "llm_fallback": True,
+                    "llm_failure": last_failure,
+                    "llm_variation_temperature": variation_temp,
+                    "llm_variation_tier": variation_tier,
+                    "llm_variation_mode": variation_mode,
+                }
+                _write_run_meta(fallback_run_id, fallback_meta)
+                if not render_csd_to_wav(fallback_csd_path, fallback_wav_path):
+                    _merge_run_meta(fallback_run_id, {"render_ok": False})
+                    return jsonify({
+                        "error": (
+                            f"Only generated {len(children)}/{count} LLM children. "
+                            f"Child {child_index + 1} failed after {MAX_LLM_CHILD_ATTEMPTS} attempts "
+                            f"({last_failure}) and fallback render also failed."
+                        ),
+                        "children": children,
+                    }), 500
+                _merge_run_meta(fallback_run_id, {"render_ok": True})
+                children.append({
+                    "csd": fallback_csd,
+                    "run_id": fallback_run_id,
+                    "csd_url": f"/generated/{fallback_run_id}/output.csd",
+                    "wav_url": f"/generated/{fallback_run_id}/output.wav",
+                    "starter_type": "chord" if variation_tier == "high" else "arpeggio",
+                    "note_mode": "chord" if variation_tier == "high" else "arpeggio",
+                    "child_index": child_index + 1,
+                    "duration_sec": STARTER_DURATION_SEC,
+                    "derived_from": source_run_id,
+                })
+
+        batch_usage = {k: usage_totals[k] for k in usage_totals if usage_seen[k]} or None
+        batch_cost = _estimate_llm_cost(provider, batch_usage)
+        log_console("ok", f"children llm done · {len(children)}/{count} rendered")
+        return jsonify({
+            "success": True,
+            "count": len(children),
+            "derived_from": source_run_id,
+            "provider": provider,
+            "model": model,
+            "variation_tier": variation_tier,
+            "variation_mode": variation_mode,
+            "variation_temperature": variation_temp,
+            "usage": batch_usage,
+            "cost": batch_cost,
+            "children": children,
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        err = str(e)
+        if not err or len(err) > 200:
+            err = "LLM child generation failed"
         return jsonify({"error": err}), 500
 
 
@@ -660,6 +1751,27 @@ def api_list():
     return jsonify({"runs": recent + favourites_tail})
 
 
+@app.route("/api/run", methods=["DELETE"])
+def api_delete_run():
+    """Delete one generated run directory from the local library."""
+    try:
+        data = request.get_json() or {}
+        run_id = data.get("run_id")
+        if not _valid_run_id(run_id):
+            return jsonify({"error": "Invalid run_id"}), 400
+
+        run_dir = GENERATED_DIR / run_id
+        if not run_dir.is_dir():
+            return jsonify({"error": f"Run not found: {run_id}"}), 404
+
+        shutil.rmtree(run_dir)
+        log_console("info", "deleted run", run_id=run_id)
+        return jsonify({"ok": True, "run_id": run_id})
+    except Exception as e:
+        err = str(e) or "Delete failed"
+        return jsonify({"error": err[:300]}), 500
+
+
 # ============================================================================
 # External LLM editing
 # ----------------------------------------------------------------------------
@@ -678,7 +1790,7 @@ def api_list():
 KEY_STORE_DIR = Path.home() / ".cstore"
 KEY_STORE = KEY_STORE_DIR / "keys.json"
 # Providers that require a user-supplied API key.
-KEY_PROVIDERS = ("openai", "anthropic", "gemini")
+KEY_PROVIDERS = ("openai", "anthropic", "gemini", "openrouter")
 # All providers the /api/edit endpoint will accept. `qwen` is served by a
 # local Ollama instance (http://127.0.0.1:11434 by default) so it needs no
 # key — users just run `ollama pull qwen2.5-coder:7b` once. `pollinations`
@@ -696,6 +1808,27 @@ OLLAMA_BASE_URL = os.environ.get(
 POLLINATIONS_BASE_URL = os.environ.get(
     "CSTORE_POLLINATIONS_URL", "https://text.pollinations.ai"
 ).rstrip("/")
+OPENROUTER_BASE_URL = os.environ.get(
+    "CSTORE_OPENROUTER_URL", "https://openrouter.ai/api/v1"
+).rstrip("/")
+_COST_RATE_PER_1M = {
+    "openai": {
+        "prompt": os.environ.get("CSTORE_COST_OPENAI_PROMPT_PER_1M"),
+        "completion": os.environ.get("CSTORE_COST_OPENAI_COMPLETION_PER_1M"),
+    },
+    "anthropic": {
+        "prompt": os.environ.get("CSTORE_COST_ANTHROPIC_PROMPT_PER_1M"),
+        "completion": os.environ.get("CSTORE_COST_ANTHROPIC_COMPLETION_PER_1M"),
+    },
+    "gemini": {
+        "prompt": os.environ.get("CSTORE_COST_GEMINI_PROMPT_PER_1M"),
+        "completion": os.environ.get("CSTORE_COST_GEMINI_COMPLETION_PER_1M"),
+    },
+    "openrouter": {
+        "prompt": os.environ.get("CSTORE_COST_OPENROUTER_PROMPT_PER_1M"),
+        "completion": os.environ.get("CSTORE_COST_OPENROUTER_COMPLETION_PER_1M"),
+    },
+}
 
 LLM_SYSTEM_PROMPT = """You are an expert Csound programmer working on .csd files that will be rendered immediately with `csound -W -d -m135 -o output.wav input.csd`. Your output is fed *directly* to the csound binary — there is no human review step.
 
@@ -881,7 +2014,95 @@ def _extract_csd(text: str) -> str | None:
     return block.group(0).strip() + "\n"
 
 
-def _call_openai(key: str, model: str, system: str, user: str, timeout: int = 90) -> str:
+def _to_positive_float(raw: str | None) -> float | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
+
+def _normalize_usage(
+    prompt_tokens: object | None,
+    completion_tokens: object | None,
+    total_tokens: object | None,
+) -> dict | None:
+    usage = {}
+    try:
+        if prompt_tokens is not None:
+            usage["prompt_tokens"] = int(prompt_tokens)
+    except (TypeError, ValueError):
+        pass
+    try:
+        if completion_tokens is not None:
+            usage["completion_tokens"] = int(completion_tokens)
+    except (TypeError, ValueError):
+        pass
+    try:
+        if total_tokens is not None:
+            usage["total_tokens"] = int(total_tokens)
+    except (TypeError, ValueError):
+        pass
+    if "total_tokens" not in usage and (
+        "prompt_tokens" in usage or "completion_tokens" in usage
+    ):
+        usage["total_tokens"] = int(usage.get("prompt_tokens", 0)) + int(
+            usage.get("completion_tokens", 0)
+        )
+    return usage or None
+
+
+def _estimate_llm_cost(provider: str, usage: dict | None) -> dict:
+    if provider in ("qwen", "pollinations"):
+        return {
+            "estimated_usd": 0.0,
+            "estimated_source": "provider_free_tier",
+            "free_tier": True,
+        }
+    if not usage:
+        return {
+            "estimated_usd": None,
+            "estimated_source": "usage_unavailable",
+            "free_tier": False,
+        }
+
+    rates = _COST_RATE_PER_1M.get(provider) or {}
+    in_rate = _to_positive_float(rates.get("prompt"))
+    out_rate = _to_positive_float(rates.get("completion"))
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    if in_rate is None or out_rate is None:
+        return {
+            "estimated_usd": None,
+            "estimated_source": "missing_rate_config",
+            "free_tier": False,
+        }
+    if prompt_tokens is None or completion_tokens is None:
+        return {
+            "estimated_usd": None,
+            "estimated_source": "missing_usage_breakdown",
+            "free_tier": False,
+        }
+    estimated = (float(prompt_tokens) / 1_000_000.0) * in_rate + (
+        float(completion_tokens) / 1_000_000.0
+    ) * out_rate
+    return {
+        "estimated_usd": round(estimated, 8),
+        "estimated_source": "env_provider_rates_per_1m",
+        "free_tier": False,
+    }
+
+
+def _call_openai(
+    key: str,
+    model: str,
+    system: str,
+    user: str,
+    timeout: int = 90,
+    temperature: float = 0.3,
+) -> tuple[str, dict | None]:
     import requests
     r = requests.post(
         "https://api.openai.com/v1/chat/completions",
@@ -895,17 +2116,30 @@ def _call_openai(key: str, model: str, system: str, user: str, timeout: int = 90
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": 0.3,
+            "temperature": max(0.0, min(1.0, float(temperature))),
         },
         timeout=timeout,
     )
     if r.status_code != 200:
         raise RuntimeError(f"OpenAI {r.status_code}: {r.text[:300]}")
     data = r.json()
-    return data["choices"][0]["message"]["content"]
+    usage_raw = data.get("usage") or {}
+    usage = _normalize_usage(
+        usage_raw.get("prompt_tokens"),
+        usage_raw.get("completion_tokens"),
+        usage_raw.get("total_tokens"),
+    )
+    return data["choices"][0]["message"]["content"], usage
 
 
-def _call_anthropic(key: str, model: str, system: str, user: str, timeout: int = 90) -> str:
+def _call_anthropic(
+    key: str,
+    model: str,
+    system: str,
+    user: str,
+    timeout: int = 90,
+    temperature: float = 0.3,
+) -> tuple[str, dict | None]:
     import requests
     r = requests.post(
         "https://api.anthropic.com/v1/messages",
@@ -917,6 +2151,7 @@ def _call_anthropic(key: str, model: str, system: str, user: str, timeout: int =
         json={
             "model": model,
             "max_tokens": 4096,
+            "temperature": max(0.0, min(1.0, float(temperature))),
             "system": system,
             "messages": [{"role": "user", "content": user}],
         },
@@ -925,13 +2160,27 @@ def _call_anthropic(key: str, model: str, system: str, user: str, timeout: int =
     if r.status_code != 200:
         raise RuntimeError(f"Anthropic {r.status_code}: {r.text[:300]}")
     data = r.json()
-    return "".join(
+    usage_raw = data.get("usage") or {}
+    usage = _normalize_usage(
+        usage_raw.get("input_tokens"),
+        usage_raw.get("output_tokens"),
+        usage_raw.get("total_tokens"),
+    )
+    content = "".join(
         block.get("text", "") for block in data.get("content", [])
         if block.get("type") == "text"
     )
+    return content, usage
 
 
-def _call_gemini(key: str, model: str, system: str, user: str, timeout: int = 90) -> str:
+def _call_gemini(
+    key: str,
+    model: str,
+    system: str,
+    user: str,
+    timeout: int = 90,
+    temperature: float = 0.3,
+) -> tuple[str, dict | None]:
     import requests
     # Gemini's REST API takes the system instructions as a top-level field.
     r = requests.post(
@@ -941,18 +2190,102 @@ def _call_gemini(key: str, model: str, system: str, user: str, timeout: int = 90
         json={
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 4096},
+            "generationConfig": {
+                "temperature": max(0.0, min(1.0, float(temperature))),
+                "maxOutputTokens": 4096,
+            },
         },
         timeout=timeout,
     )
     if r.status_code != 200:
         raise RuntimeError(f"Gemini {r.status_code}: {r.text[:300]}")
     data = r.json()
+    usage_raw = data.get("usageMetadata") or {}
+    usage = _normalize_usage(
+        usage_raw.get("promptTokenCount"),
+        usage_raw.get("candidatesTokenCount"),
+        usage_raw.get("totalTokenCount"),
+    )
     candidates = data.get("candidates") or []
     if not candidates:
-        return ""
+        return "", usage
     parts = candidates[0].get("content", {}).get("parts", [])
-    return "".join(p.get("text", "") for p in parts)
+    return "".join(p.get("text", "") for p in parts), usage
+
+
+def _call_openrouter(
+    key: str,
+    model: str,
+    system: str,
+    user: str,
+    timeout: int = 120,
+    temperature: float = 0.3,
+) -> tuple[str, dict | None]:
+    """Call OpenRouter's OpenAI-compatible chat completions API.
+
+    OpenRouter offers free-tier routing through `openrouter/free` plus many
+    provider-specific `:free` variants. It still requires an API key even for
+    free models.
+    """
+    import requests
+
+    try:
+        r = requests.post(
+            f"{OPENROUTER_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model or "openrouter/free",
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": max(0.0, min(1.0, float(temperature))),
+            },
+            timeout=timeout,
+        )
+    except requests.exceptions.ConnectionError as e:
+        raise RuntimeError(
+            f"Could not reach OpenRouter at {OPENROUTER_BASE_URL}. "
+            "Check your internet connection."
+        ) from e
+    except requests.exceptions.Timeout as e:
+        raise RuntimeError(
+            f"OpenRouter timed out after {timeout}s — retry in a moment."
+        ) from e
+
+    if r.status_code in (401, 403):
+        raise RuntimeError(
+            "OpenRouter rejected the API key (401/403). "
+            "Create or replace your key at https://openrouter.ai/settings/keys."
+        )
+    if r.status_code == 429:
+        raise RuntimeError(
+            "OpenRouter rate limit hit on the free tier. "
+            "Wait a bit and retry."
+        )
+    if r.status_code != 200:
+        raise RuntimeError(f"OpenRouter {r.status_code}: {r.text[:300]}")
+    try:
+        data = r.json()
+    except ValueError as e:
+        raise RuntimeError("OpenRouter returned non-JSON response") from e
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError("OpenRouter returned no choices")
+    msg = choices[0].get("message", {}) or {}
+    content = msg.get("content") or ""
+    if not content:
+        raise RuntimeError("OpenRouter returned an empty response")
+    usage_raw = data.get("usage") or {}
+    usage = _normalize_usage(
+        usage_raw.get("prompt_tokens"),
+        usage_raw.get("completion_tokens"),
+        usage_raw.get("total_tokens"),
+    )
+    return content, usage
 
 
 def _call_qwen(
@@ -962,7 +2295,8 @@ def _call_qwen(
     user: str,
     timeout: int = 900,
     think: bool = True,
-) -> str:
+    temperature: float = 0.2,
+) -> tuple[str, dict | None]:
     """Call a Qwen model through a local Ollama server.
 
     Ollama is a free local LLM runner (https://ollama.com). If it's running,
@@ -1008,7 +2342,7 @@ def _call_qwen(
                     # Conservative sampling — we want a near-deterministic
                     # edit, not a creative rewrite. Values from Qwen team's
                     # own recommended defaults for code.
-                    "temperature": 0.2,
+                    "temperature": max(0.0, min(1.0, float(temperature))),
                     "top_p": 0.9,
                     "top_k": 20,
                     "min_p": 0.0,
@@ -1050,7 +2384,12 @@ def _call_qwen(
         msg = msg_obj.get("thinking") or ""
     if not msg:
         raise RuntimeError("Ollama returned an empty response")
-    return msg
+    usage = _normalize_usage(
+        data.get("prompt_eval_count"),
+        data.get("eval_count"),
+        data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
+    )
+    return msg, usage
 
 
 def _call_pollinations(
@@ -1059,7 +2398,8 @@ def _call_pollinations(
     system: str,
     user: str,
     timeout: int = 120,
-) -> str:
+    temperature: float = 0.3,
+) -> tuple[str, dict | None]:
     """Call the public Pollinations text API — no API key required.
 
     Pollinations (https://pollinations.ai) runs a free, anonymous-access
@@ -1090,7 +2430,7 @@ def _call_pollinations(
                 # Low temperature because Csound syntax is brittle — the
                 # model benefits more from "careful editing" than from
                 # creative rewrites, same as the other providers here.
-                "temperature": 0.3,
+                "temperature": max(0.0, min(1.0, float(temperature))),
             },
             timeout=timeout,
         )
@@ -1123,13 +2463,20 @@ def _call_pollinations(
     content = msg.get("content") or msg.get("reasoning_content") or ""
     if not content:
         raise RuntimeError("Pollinations returned an empty response")
-    return content
+    usage_raw = data.get("usage") or {}
+    usage = _normalize_usage(
+        usage_raw.get("prompt_tokens"),
+        usage_raw.get("completion_tokens"),
+        usage_raw.get("total_tokens"),
+    )
+    return content, usage
 
 
 _LLM_DISPATCH = {
     "openai": _call_openai,
     "anthropic": _call_anthropic,
     "gemini": _call_gemini,
+    "openrouter": _call_openrouter,
     "qwen": _call_qwen,
     "pollinations": _call_pollinations,
 }
@@ -1236,7 +2583,6 @@ def api_render():
         run_dir.mkdir(parents=True, exist_ok=True)
         csd_path = run_dir / "output.csd"
         wav_path = run_dir / "output.wav"
-        meta_path = run_dir / "meta.json"
 
         csd_path.write_text(csd_text, encoding="utf-8")
         log_console(
@@ -1250,10 +2596,10 @@ def api_render():
             "kind": "manual_edit",
             "derived_from": derived_from,
         }
+        _write_run_meta(new_run_id, meta)
 
         if not render_csd_to_wav(csd_path, wav_path):
-            meta["render_ok"] = False
-            meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            _merge_run_meta(new_run_id, {"render_ok": False})
             return jsonify({
                 "error": (
                     "Csound could not render audio from the supplied .csd. "
@@ -1263,8 +2609,7 @@ def api_render():
                 "csd_url": f"/generated/{new_run_id}/output.csd",
             }), 422
 
-        meta["render_ok"] = True
-        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        _merge_run_meta(new_run_id, {"render_ok": True})
 
         return jsonify({
             "success": True,
@@ -1444,15 +2789,18 @@ def api_edit():
             # and passing unknown kwargs into their helpers would raise a
             # TypeError.
             if provider == "qwen":
-                raw = _call_qwen(
+                raw, usage = _call_qwen(
                     key, model, LLM_SYSTEM_PROMPT, user_msg, think=think
                 )
             else:
-                raw = _LLM_DISPATCH[provider](key, model, LLM_SYSTEM_PROMPT, user_msg)
+                raw, usage = _LLM_DISPATCH[provider](
+                    key, model, LLM_SYSTEM_PROMPT, user_msg
+                )
         except Exception as e:
             # Anything from timeout, network error, HTTP error, or JSON shape.
             log_console("err", f"LLM call failed: {str(e)[:200]}")
             return jsonify({"error": f"LLM call failed: {str(e)[:300]}"}), 502
+        cost = _estimate_llm_cost(provider, usage)
         log_console(
             "info",
             f"LLM responded · {len(raw or '')} chars in {time.time() - t_llm:.2f}s",
@@ -1466,6 +2814,7 @@ def api_edit():
                     "<CsoundSynthesizer>…</CsoundSynthesizer> block."
                 ),
             }), 502
+        new_csd = apply_output_envelope(new_csd)
 
         new_run_id = (
             datetime.now().strftime("%Y%m%d_%H%M%S") + "_edit_" + uuid.uuid4().hex[:8]
@@ -1474,7 +2823,6 @@ def api_edit():
         run_dir.mkdir(parents=True, exist_ok=True)
         csd_path = run_dir / "output.csd"
         wav_path = run_dir / "output.wav"
-        meta_path = run_dir / "meta.json"
 
         csd_path.write_text(new_csd, encoding="utf-8")
 
@@ -1484,12 +2832,15 @@ def api_edit():
             "provider": provider,
             "model": model,
             "instruction": instruction,
+            "llm_cost": cost,
         }
+        if usage:
+            meta["llm_usage"] = usage
+        _write_run_meta(new_run_id, meta)
 
         if not render_csd_to_wav(csd_path, wav_path):
             # Keep the csd so the user can inspect the broken edit.
-            meta["render_ok"] = False
-            meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            _merge_run_meta(new_run_id, {"render_ok": False})
             return jsonify({
                 "error": (
                     "LLM produced a .csd but Csound could not render audible "
@@ -1499,8 +2850,7 @@ def api_edit():
                 "csd_url": f"/generated/{new_run_id}/output.csd",
             }), 422
 
-        meta["render_ok"] = True
-        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        _merge_run_meta(new_run_id, {"render_ok": True})
 
         return jsonify({
             "success": True,
@@ -1512,6 +2862,8 @@ def api_edit():
             "provider": provider,
             "model": model,
             "instruction": instruction,
+            "usage": usage,
+            "cost": cost,
         })
     except Exception as e:
         err = str(e) or "Edit failed"

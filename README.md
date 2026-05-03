@@ -43,7 +43,9 @@ python evaluate.py --checkpoint checkpoints/Cstore_V1.0.1/best --num_samples 100
 ## Web Console (`webapp-next/`)
 
 A local Next.js + Flask console for drafting, previewing, editing, and
-favouriting `.csd` renders in the browser.
+favouriting `.csd` renders in the browser. It can also generate batches of
+starter/child variations (`single`, `arpeggio`, `chord`) with user-selected
+output count and token budget, with auto/manual note-range controls.
 
 ### 1 · Install prerequisites
 
@@ -59,7 +61,13 @@ Optional — for the local **Qwen** edit tab only:
 pulled (e.g. `ollama pull qwen2.5-coder:7b`).
 OpenAI / Claude / Gemini edits need their own API keys (stored server-side at
 `~/.cstore/keys.json`, chmod `0600`). The **Pollinations · free** tab is
-keyless and works out of the box.
+keyless and works out of the box. LLM edit runs log token/cost metadata when
+available; paid-provider cost estimation only runs from explicit env-rate
+configuration, otherwise cost is shown as unavailable.
+
+Child generation now supports both:
+- classic source-derived children, and
+- LLM child variants (provider/model selectable, auto-variation prompts).
 
 ### 2 · Install project dependencies
 
@@ -86,7 +94,9 @@ npm run dev
 
 Open **http://localhost:3000** in your browser. Press `G` to draft a `.csd`,
 `Space` to play, `E` to edit with an LLM, `R` to hand-edit the source, and
-click `☆` on any library row to pin a favourite.
+click `☆` on any library row to pin a favourite. The monitor also includes a
+global playback reverb wet control (non-destructive; does not modify `.csd`).
+Generated child cards include explicit mother/parent lineage.
 
 > The Next.js dev server proxies `/api/*` and `/generated/*` to the Flask
 > sidecar (see `webapp-next/next.config.ts`). To point at a backend on a

@@ -1,5 +1,35 @@
 import Console from "./_components/Console";
 
+const faqItems = [
+  {
+    question: "Why CStore?",
+    answer:
+      "CStore exists because most text-to-music systems output final audio but not an editable creative artifact. Instead of generating only waveforms, CStore generates editable Csound .csd specifications that are inspectable, revision-friendly, versionable, and reproducible.",
+  },
+  {
+    question:
+      "If large AI models can generate better sound, why do we need CStore?",
+    answer:
+      "CStore is designed for a different goal: controllable workflow, not one-shot polish. Large models are strong at perceptual media generation, while CStore focuses on generating a transparent specification you can inspect, edit at parameter level, and deterministically re-render.",
+  },
+  {
+    question:
+      "Is CStore a replacement for GPT, Claude, Suno, MusicGen, or Sora-style systems?",
+    answer:
+      "No. CStore is complementary. Frontier models are useful for high-quality media output and broad reasoning. CStore is for local, editable, executable, and reproducible music specification generation.",
+  },
+  {
+    question: "What does “editable” mean in CStore?",
+    answer:
+      "The output is a Csound program, not just a sound file. You can directly modify synthesis parameters, envelopes, filters, modulation, event timing, score values, and instrument structure in the generated .csd.",
+  },
+  {
+    question: "How do you evaluate CStore?",
+    answer:
+      "CStore uses layered usability metrics: structural validity, render success, and audible output. The baseline reports are 61% structural validity, 32% render success, and 19% audible output in a representative 100-sample batch (seed 42), with major improvements after expert-curated fine-tuning.",
+  },
+];
+
 /**
  * The page is a server component that ships only markup + tokens. All
  * interactivity (generate, playback, FFT, copy, library) lives in one client
@@ -55,6 +85,40 @@ export default function Page() {
 
       {/* ———— Console (client island) ——————————————————————————————— */}
       <Console />
+
+      {/* ———— FAQ ——————————————————————————————————————————————————— */}
+      <section className="border-b border-rule-2 py-5">
+        <div className="grid grid-cols-12 gap-6">
+          <div className="col-span-12 md:col-span-4">
+            <div className="eyebrow">Frequently Asked Questions</div>
+            <p className="mt-1 text-[15px] leading-relaxed text-ink-2">
+              Core positioning for CStore as an editable and reproducible
+              text-to-music workflow.
+            </p>
+          </div>
+          <div className="col-span-12 space-y-3 md:col-span-8">
+            {faqItems.map((item) => (
+              <details
+                key={item.question}
+                className="border border-ink/25 bg-paper-soft px-4 py-3"
+              >
+                <summary className="cursor-pointer list-none pr-6 text-[15px] leading-relaxed text-ink">
+                  <span className="mono mr-2 text-[11px] uppercase tracking-[0.16em] text-ink-muted">
+                    Q
+                  </span>
+                  {item.question}
+                </summary>
+                <p className="mt-3 border-t border-ink/20 pt-3 text-sm leading-relaxed text-ink-2">
+                  <span className="mono mr-2 text-[11px] uppercase tracking-[0.16em] text-ink-muted">
+                    A
+                  </span>
+                  {item.answer}
+                </p>
+              </details>
+            ))}
+          </div>
+        </div>
+      </section>
 
       {/* ———— Colophon ———————————————————————————————————————————— */}
       <footer className="mt-10 grid grid-cols-12 gap-6 border-t border-ink pt-5 text-sm">

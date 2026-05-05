@@ -44,6 +44,7 @@ webapp-next/
 - Python 3.11+ with the deps in the repo root: `pip install -r ../requirements.txt`
 - [Csound](https://csound.com/) 6.18+ on your `PATH` (the `csound` binary)
 - At least one checkpoint in `../model/checkpoints/` (default: `Cstore_V1.0.2/best`)
+- Checkpoints are not committed to git; download from [Releases](https://github.com/CharlieSL1/CStore/releases) if missing.
 
 ## Run it
 
@@ -61,8 +62,18 @@ npm run dev
 
 Open http://localhost:3000.
 
-`npm run server` is just a shortcut for `python server/app.py`, so you can
-also run that directly if you prefer a Python venv.
+`npm run server` tries `python3 server/app.py` first, then falls back to
+`python server/app.py`. You can also run those commands directly if you prefer
+a Python venv.
+
+If backend startup fails, check:
+
+```bash
+# from webapp-next/
+python3 --version || python --version
+ls ../model/checkpoints
+csound --version
+```
 
 To point the UI at a backend on a different host/port, set
 `CSTORE_BACKEND_URL` before `npm run dev` — see `next.config.ts`.

@@ -33,10 +33,42 @@ git clone https://github.com/CharlieSL1/CStore.git
 cd CStore
 pip install -r requirements.txt
 cd model
+# Download and extract at least one checkpoint from Releases into:
+# model/checkpoints/<checkpoint_name>/best
+# https://github.com/CharlieSL1/CStore/releases
+cd ..
+cd model
 python evaluate.py --checkpoint checkpoints/Cstore_V1.0.1/best --num_samples 100 --seed 42
 ```
 
 **Requirements** — Python 3.11+, PyTorch, Transformers, [Csound](https://csound.com/) 6.18.0
+
+### Fresh-clone run order (local)
+
+```bash
+# 1) Python dependencies (repo root)
+pip install -r requirements.txt
+
+# 2) Ensure at least one checkpoint exists
+# model/checkpoints/Cstore_V1.0.2/best (or another release checkpoint)
+
+# 3) Install web dependencies
+cd webapp-next
+npm install
+
+# 4) Start backend and frontend in separate terminals
+npm run server
+npm run dev
+```
+
+### Startup troubleshooting (common failures)
+
+- `checkpoint not found`:
+  - Download checkpoint artifacts from [Releases](https://github.com/CharlieSL1/CStore/releases) and place them under `model/checkpoints/.../best`.
+- `python: command not found` when running backend:
+  - Use `npm run server` (now tries `python3` first), or run `python3 server/app.py` directly from `webapp-next/`.
+- `csound not found` or render fails immediately:
+  - Install [Csound](https://csound.com/) and verify `csound --version` works in your shell.
 
 ---
 
@@ -86,7 +118,7 @@ two terminals:
 
 ```bash
 # terminal 1 — backend (Flask on 127.0.0.1:5000)
-npm run server                          # == python server/app.py
+npm run server                          # tries python3 first, then python
 
 # terminal 2 — UI (Next.js on http://localhost:3000)
 npm run dev

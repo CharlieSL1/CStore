@@ -2,7 +2,7 @@ import path from "node:path";
 import type { NextConfig } from "next";
 
 /**
- * The Flask backend at ../webapp/app.py listens on 127.0.0.1:5000 and exposes:
+ * The Flask backend at ./server/app.py listens on 127.0.0.1:5000 and exposes:
  *   POST /api/generate
  *   GET  /api/list
  *   GET  /generated/<run_id>/output.csd

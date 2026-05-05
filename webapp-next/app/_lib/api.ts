@@ -1,5 +1,5 @@
 /**
- * Thin wrappers around the Flask backend in ../webapp/app.py.
+ * Thin wrappers around the Flask backend in ./server/app.py.
  * Paths are relative so Next.js's rewrites (see next.config.ts) can proxy them.
  */
 

@@ -2,10 +2,10 @@
   "name": "cstore-webapp-next",
   "version": "0.1.0",
   "private": true,
-  "description": "Next.js front-end for the CStore text-to-Csound generator. Proxies to the Flask backend in ../webapp.",
+  "description": "Next.js front-end for the CStore text-to-Csound generator. Proxies to the Flask backend in ./server.",
   "scripts": {
     "dev": "next dev --turbopack",
-    "server": "python server/app.py",
+    "server": "python3 server/app.py || python server/app.py",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

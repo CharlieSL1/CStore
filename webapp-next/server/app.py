@@ -2185,22 +2185,46 @@ def _call_anthropic(
     temperature: float = 0.3,
 ) -> tuple[str, dict | None]:
     import requests
+    headers = {
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "max_tokens": 4096,
+        "temperature": max(0.0, min(1.0, float(temperature))),
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+    }
     r = requests.post(
         "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": model,
-            "max_tokens": 4096,
-            "temperature": max(0.0, min(1.0, float(temperature))),
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        },
+        headers=headers,
+        json=payload,
         timeout=timeout,
     )
+    if r.status_code == 400:
+        body_lc = (r.text or "").lower()
+        # Some Claude model/API combinations reject the `temperature` field.
+        # If that happens, transparently retry once without it so editing
+        # continues to work instead of failing hard.
+        if "temperature" in body_lc and ("unknown" in body_lc or "unrecognized" in body_lc or "not allowed" in body_lc):
+            log_console(
+                "warn",
+                f"Anthropic rejected temperature for model {model} · retrying without temperature",
+            )
+            payload_no_temp = {
+                "model": model,
+                "max_tokens": 4096,
+                "system": system,
+                "messages": [{"role": "user", "content": user}],
+            }
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=payload_no_temp,
+                timeout=timeout,
+            )
     if r.status_code != 200:
         raise RuntimeError(f"Anthropic {r.status_code}: {r.text[:300]}")
     data = r.json()
@@ -2210,10 +2234,21 @@ def _call_anthropic(
         usage_raw.get("output_tokens"),
         usage_raw.get("total_tokens"),
     )
-    content = "".join(
-        block.get("text", "") for block in data.get("content", [])
-        if block.get("type") == "text"
-    )
+    raw_content = data.get("content", [])
+    if isinstance(raw_content, str):
+        content = raw_content
+    elif isinstance(raw_content, list):
+        chunks: list[str] = []
+        for block in raw_content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                chunks.append(block.get("text", ""))
+            elif isinstance(block.get("content"), str):
+                chunks.append(block.get("content", ""))
+        content = "".join(chunks)
+    else:
+        content = ""
     return content, usage
 
 
@@ -2340,6 +2375,7 @@ def _call_qwen(
     timeout: int = 900,
     think: bool = True,
     temperature: float = 0.2,
+    max_busy_retries: int = 2,
 ) -> tuple[str, dict | None]:
     """Call a Qwen model through a local Ollama server.
 
@@ -2366,49 +2402,80 @@ def _call_qwen(
       allocate way more KV cache than we need.
     """
     import requests
-    try:
-        r = requests.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            headers={"Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "stream": False,
-                # Toggle reasoning. Default on because the quality of the
-                # final .csd depends strongly on letting the model plan
-                # the edit first; the UI can pass `think: false` when the
-                # user wants a fast, cheap draft.
-                "think": bool(think),
-                "options": {
-                    # Conservative sampling — we want a near-deterministic
-                    # edit, not a creative rewrite. Values from Qwen team's
-                    # own recommended defaults for code.
-                    "temperature": max(0.0, min(1.0, float(temperature))),
-                    "top_p": 0.9,
-                    "top_k": 20,
-                    "min_p": 0.0,
-                    "repeat_penalty": 1.05,
-                    "num_ctx": 32768,
-                    # Enough room for the model to think AND emit a full
-                    # replacement .csd. Typical thinking trace is 1-3 k
-                    # tokens; a .csd is rarely over 1.5 k tokens.
-                    "num_predict": 8192,
-                },
-            },
-            timeout=timeout,
-        )
-    except requests.exceptions.ConnectionError as e:
-        raise RuntimeError(
-            f"Could not reach Ollama at {OLLAMA_BASE_URL}. "
-            "Install Ollama from https://ollama.com and run `ollama serve`."
-        ) from e
-    except requests.exceptions.Timeout as e:
-        raise RuntimeError(
-            f"Ollama timed out after {timeout}s — is the model still loading?"
-        ) from e
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "stream": False,
+        # Toggle reasoning. Default on because the quality of the
+        # final .csd depends strongly on letting the model plan
+        # the edit first; the UI can pass `think: false` when the
+        # user wants a fast, cheap draft.
+        "think": bool(think),
+        "options": {
+            # Conservative sampling — we want a near-deterministic
+            # edit, not a creative rewrite. Values from Qwen team's
+            # own recommended defaults for code.
+            "temperature": max(0.0, min(1.0, float(temperature))),
+            "top_p": 0.9,
+            "top_k": 20,
+            "min_p": 0.0,
+            "repeat_penalty": 1.05,
+            "num_ctx": 32768,
+            # Enough room for the model to think AND emit a full
+            # replacement .csd. Typical thinking trace is 1-3 k
+            # tokens; a .csd is rarely over 1.5 k tokens.
+            "num_predict": 8192,
+        },
+    }
+    r = None
+    for attempt in range(max_busy_retries + 1):
+        try:
+            r = requests.post(
+                f"{OLLAMA_BASE_URL}/api/chat",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=timeout,
+            )
+        except requests.exceptions.ConnectionError as e:
+            raise RuntimeError(
+                f"Could not reach Ollama at {OLLAMA_BASE_URL}. "
+                "Install Ollama from https://ollama.com and run `ollama serve`."
+            ) from e
+        except requests.exceptions.Timeout as e:
+            raise RuntimeError(
+                f"Ollama timed out after {timeout}s — is the model still loading?"
+            ) from e
+
+        if r.status_code in (429, 503):
+            if attempt >= max_busy_retries:
+                break
+            wait_s = attempt + 1
+            log_console(
+                "warn",
+                f"Ollama busy ({r.status_code}) · retrying in {wait_s}s",
+            )
+            time.sleep(wait_s)
+            continue
+        if r.status_code != 200:
+            lower_body = (r.text or "").lower()
+            if (
+                attempt < max_busy_retries
+                and ("busy" in lower_body or "loading" in lower_body)
+            ):
+                wait_s = attempt + 1
+                log_console(
+                    "warn",
+                    f"Ollama busy/loading response · retrying in {wait_s}s",
+                )
+                time.sleep(wait_s)
+                continue
+        break
+
+    if r is None:
+        raise RuntimeError("No response from Ollama")
 
     if r.status_code == 404:
         # Ollama returns 404 when the requested model isn't pulled locally.
@@ -2937,4 +3004,4 @@ if __name__ == "__main__":
         log_console("sys", f"csound detected · {version}")
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         log_console("warn", f"csound probe failed · {e}")
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)

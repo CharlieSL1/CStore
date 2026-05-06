@@ -359,7 +359,7 @@ export default function EditDialog({ open, runId, onClose, onEdited }: Props) {
       aria-modal="true"
       aria-labelledby="edit-dialog-title"
     >
-      <div className="relative w-full max-w-[640px] border border-ink bg-paper shadow-[8px_8px_0_rgba(24,22,26,0.12)]">
+      <div className="relative flex max-h-[calc(100vh-3rem)] w-full max-w-[640px] flex-col overflow-hidden border border-ink bg-paper shadow-[8px_8px_0_rgba(24,22,26,0.12)]">
         {/* ——— Header ——— */}
         <div className="flex items-end justify-between border-b border-ink px-5 pb-3 pt-4">
           <div>
@@ -391,7 +391,7 @@ export default function EditDialog({ open, runId, onClose, onEdited }: Props) {
               ref={i === 0 ? firstFieldRef : undefined}
               onClick={() => setProvider(p.id)}
               className={
-                "mono flex-1 border-r border-rule-2 px-4 py-2 text-[12px] uppercase tracking-widest last:border-r-0 " +
+                "mono flex-1 truncate border-r border-rule-2 px-3 py-2 text-[11px] uppercase tracking-widest last:border-r-0 md:px-4 md:text-[12px] " +
                 (provider === p.id
                   ? "bg-paper-3 text-ink"
                   : "bg-paper-2 text-ink-muted hover:text-ink")
@@ -403,7 +403,7 @@ export default function EditDialog({ open, runId, onClose, onEdited }: Props) {
         </div>
 
         {/* ——— Body ——— */}
-        <div className="space-y-4 px-5 py-4">
+        <div className="min-h-0 space-y-4 overflow-y-auto px-5 py-4">
           {providerDef.keyless ? (
             /* Pollinations · free public endpoint — no key, no local install.
                Show reachability + rate-limit reminder so the user isn't
@@ -713,7 +713,7 @@ ollama pull qwen2.5-coder:7b  # ~4 GB`}
                 onChange={(e) => setInstruction(e.target.value)}
                 rows={4}
                 placeholder={`e.g. "Add a long plate reverb to all voices."\n     "Transpose down one octave, keep the rhythm."\n     "Replace the FM voice with a plucked string."`}
-                className="mono scroll-ink block w-full resize-y border border-rule bg-paper px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-ink-red"
+                className="mono scroll-ink block max-h-[40vh] min-h-[7rem] w-full resize-y border border-rule bg-paper px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-ink-red"
               />
               {busy === "edit" && (
                 <div className="hatch pointer-events-none absolute inset-0 border border-rule" />

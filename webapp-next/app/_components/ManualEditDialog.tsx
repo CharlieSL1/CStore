@@ -144,7 +144,7 @@ export default function ManualEditDialog({
       aria-modal="true"
       aria-labelledby="manual-edit-title"
     >
-      <div className="relative flex w-full max-w-[960px] flex-col border border-ink bg-paper shadow-[8px_8px_0_rgba(24,22,26,0.12)]">
+      <div className="relative flex max-h-[calc(100vh-3rem)] w-full max-w-[960px] flex-col overflow-hidden border border-ink bg-paper shadow-[8px_8px_0_rgba(24,22,26,0.12)]">
         {/* ——— Header ——— */}
         <div className="flex items-end justify-between border-b border-ink px-5 pb-3 pt-4">
           <div>
@@ -172,7 +172,7 @@ export default function ManualEditDialog({
         </div>
 
         {/* ——— Editor ——— */}
-        <div className="flex flex-1 flex-col gap-3 px-5 py-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
           <div className="flex items-center justify-between">
             <span className="eyebrow-ink">output.csd · editable</span>
             <div className="mono tabular flex items-center gap-3 text-[11px] text-ink-muted">
@@ -211,7 +211,7 @@ export default function ManualEditDialog({
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
-              className="mono scroll-ink block w-full resize-none whitespace-pre overflow-auto bg-paper-2 px-3 py-3 text-[12px] leading-[1.55] text-ink outline-none focus:bg-paper"
+              className="mono scroll-ink block w-full resize-none whitespace-pre overflow-auto overscroll-contain bg-paper-2 px-3 py-3 text-[12px] leading-[1.55] text-ink outline-none focus:bg-paper"
               placeholder="<CsoundSynthesizer>…</CsoundSynthesizer>"
             />
           </div>

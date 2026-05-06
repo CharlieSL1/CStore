@@ -107,7 +107,7 @@ const PROVIDERS: ProviderDef[] = [
   {
     id: "gemini",
     label: "Gemini",
-    models: ["gemini-3.1-pro", "gemini-3-flash-preview"],
+    models: ["gemini-3.1-pro-preview", "gemini-3-flash-preview"],
     local: false,
     keyHint: "AIza…",
     docs: "https://aistudio.google.com/app/apikey",
@@ -707,13 +707,18 @@ ollama pull qwen2.5-coder:7b  # ~4 GB`}
                 what should the model change?
               </span>
             </div>
-            <textarea
-              value={instruction}
-              onChange={(e) => setInstruction(e.target.value)}
-              rows={4}
-              placeholder={`e.g. "Add a long plate reverb to all voices."\n     "Transpose down one octave, keep the rhythm."\n     "Replace the FM voice with a plucked string."`}
-              className="mono scroll-ink block w-full resize-y border border-rule bg-paper px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-ink-red"
-            />
+            <div className="relative">
+              <textarea
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+                rows={4}
+                placeholder={`e.g. "Add a long plate reverb to all voices."\n     "Transpose down one octave, keep the rhythm."\n     "Replace the FM voice with a plucked string."`}
+                className="mono scroll-ink block w-full resize-y border border-rule bg-paper px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-ink-red"
+              />
+              {busy === "edit" && (
+                <div className="hatch pointer-events-none absolute inset-0 border border-rule" />
+              )}
+            </div>
             <p className="mono mt-1 text-[10px] text-ink-muted">
               The current .csd is attached automatically. The model returns a
               full replacement .csd, which we render with Csound and save as a

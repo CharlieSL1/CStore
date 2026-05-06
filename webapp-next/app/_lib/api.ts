@@ -43,6 +43,7 @@ export type StarterBatchResponse = {
   duration_sec: number;
   note_mode?: NoteMode;
   checkpoint?: string;
+  batch_tag?: string;
   starters: StarterChild[];
 };
 
@@ -52,6 +53,7 @@ export type ChildrenResponse = {
   duration_sec: number;
   note_mode: NoteMode;
   derived_from: string;
+  batch_tag?: string;
   children: StarterChild[];
 };
 
@@ -61,6 +63,7 @@ export type LlmChildrenResponse = {
   derived_from: string;
   provider: LlmProvider;
   model: string;
+  batch_tag?: string;
   variation_tier?: "low" | "medium" | "high";
   variation_mode?: string;
   variation_temperature?: number;
@@ -118,6 +121,7 @@ export type RunMeta = {
   llm_variation_tier?: "low" | "medium" | "high";
   llm_variation_mode?: string;
   llm_variation_temperature?: number;
+  batch_tag?: string;
 };
 
 export type RunEntryWithMeta = RunEntry & { meta?: RunMeta };
@@ -266,6 +270,7 @@ export async function generateStarters(
     count: number;
     seed?: number;
     checkpoint?: string;
+    batch_tag?: string;
     max_tokens?: number;
     note_duration?: number;
     note_mode?: NoteMode;
@@ -277,6 +282,7 @@ export async function generateStarters(
   const payload: Record<string, unknown> = { count: opts.count };
   if (opts.seed != null) payload.seed = opts.seed;
   if (opts.checkpoint) payload.checkpoint = opts.checkpoint;
+  if (opts.batch_tag) payload.batch_tag = opts.batch_tag;
   if (opts.max_tokens != null) payload.max_tokens = opts.max_tokens;
   if (opts.note_duration != null) payload.note_duration = opts.note_duration;
   if (opts.note_mode) payload.note_mode = opts.note_mode;
@@ -307,6 +313,7 @@ export async function generateStarters(
 export async function generateChildren(opts: {
   source_run_id: string;
   count: number;
+  batch_tag?: string;
   note_duration?: number;
   note_mode?: NoteMode;
   note_range_mode?: NoteRangeMode;
@@ -317,6 +324,7 @@ export async function generateChildren(opts: {
     source_run_id: opts.source_run_id,
     count: opts.count,
   };
+  if (opts.batch_tag) payload.batch_tag = opts.batch_tag;
   if (opts.note_duration != null) payload.note_duration = opts.note_duration;
   if (opts.note_mode) payload.note_mode = opts.note_mode;
   if (opts.note_range_mode) payload.note_range_mode = opts.note_range_mode;
@@ -346,6 +354,7 @@ export async function generateChildren(opts: {
 export async function generateChildrenLlm(opts: {
   source_run_id: string;
   count: number;
+  batch_tag?: string;
   provider: LlmProvider;
   model: string;
   think?: boolean;

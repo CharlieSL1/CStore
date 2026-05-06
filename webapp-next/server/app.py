@@ -68,6 +68,40 @@ def llm_var_profile(variation_temp: float) -> tuple[str, str, float]:
         return ("medium", "moderate", 0.5)
     return ("high", "aggressive-style-switch", 0.8)
 
+
+def _mix_seed32(value: int) -> int:
+    """Mix an integer into a well-distributed 32-bit seed."""
+    x = value & 0xFFFFFFFF
+    x ^= x >> 16
+    x = (x * 0x7FEB352D) & 0xFFFFFFFF
+    x ^= x >> 15
+    x = (x * 0x846CA68B) & 0xFFFFFFFF
+    x ^= x >> 16
+    return x
+
+
+def _auto_seed32() -> int:
+    """Best-effort high-entropy seed for runs where user didn't pin one."""
+    entropy = (
+        time.time_ns()
+        ^ random.SystemRandom().getrandbits(32)
+        ^ uuid.uuid4().int
+        ^ os.getpid()
+    )
+    return _mix_seed32(entropy)
+
+
+def _derive_child_seed(base_seed: int, child_index: int) -> int:
+    """Deterministically derive one child seed from a base batch seed."""
+    return _mix_seed32(base_seed + (child_index + 1) * 0x9E3779B9)
+
+
+def _derive_attempt_seed(base_seed: int, attempt_index: int, child_index: int = 0) -> int:
+    """Deterministically derive one retry seed per attempt and child index."""
+    return _mix_seed32(
+        base_seed + (attempt_index + 1) * 0x85EBCA6B + child_index * 0xC2B2AE35
+    )
+
 # No static_folder: the UI is served by Next.js (localhost:3000), not Flask.
 app = Flask(__name__)
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
@@ -887,7 +921,7 @@ def generate_one_sample(
     device = next(model.parameters()).device
 
     if seed is None:
-        seed = int(datetime.now().timestamp() * 1000) % (2**32)
+        seed = _auto_seed32()
 
     torch.manual_seed(seed)
     t0 = time.time()
@@ -984,13 +1018,13 @@ def generate_until_audio_success(
     meta: dict | None = None,
 ):
     """Watchdog: retry until audio renders successfully. Only returns when both CSD and WAV exist."""
-    base_seed = seed if seed is not None else int(datetime.now().timestamp() * 1000) % (2**32)
+    base_seed = seed if seed is not None else _auto_seed32()
     log_console(
         "sys",
         f"generate start · base_seed={base_seed} · max_attempts={MAX_GENERATE_ATTEMPTS}",
     )
     for attempt in range(1, MAX_GENERATE_ATTEMPTS + 1):
-        try_seed = base_seed + attempt * 12345
+        try_seed = _derive_attempt_seed(base_seed, attempt - 1, child_index)
         log_console("info", f"attempt {attempt}/{MAX_GENERATE_ATTEMPTS} · seed={try_seed}")
         attempt_meta = {**meta, "seed": try_seed} if meta else None
         csd_text, csd_path, wav_path = generate_one_sample(
@@ -1126,10 +1160,11 @@ def api_generate_starters():
     """Generate several short, audible 1.5-second starter children."""
     try:
         data = request.get_json() or {}
+        batch_tag = (data.get("batch_tag") or "").strip()[:64] or None
         seed = data.get("seed")
         if seed is not None:
             seed = int(seed)
-        base_seed = seed if seed is not None else int(datetime.now().timestamp() * 1000) % (2**32)
+        base_seed = seed if seed is not None else _auto_seed32()
 
         raw_count = data.get("count", DEFAULT_STARTER_COUNT)
         count = DEFAULT_STARTER_COUNT if raw_count in (None, "") else int(raw_count)
@@ -1159,9 +1194,10 @@ def api_generate_starters():
         )
         starters = []
         for child_index in range(count):
-            child_seed = base_seed + (child_index + 1) * 12345
+            child_seed = _derive_child_seed(base_seed, child_index)
             meta = {
                 "kind": "starter",
+                "batch_tag": batch_tag,
                 "starter_type": note_mode,
                 "note_mode": note_mode,
                 "parent_seed": base_seed,
@@ -1212,6 +1248,7 @@ def api_generate_starters():
         log_console("ok", f"starter batch done · {len(starters)}/{count} rendered")
         return jsonify({
             "success": True,
+            "batch_tag": batch_tag,
             "count": len(starters),
             "duration_sec": note_duration,
             "note_mode": note_mode,
@@ -1234,6 +1271,7 @@ def api_generate_children():
     """Create short children from a selected source run without calling the model."""
     try:
         data = request.get_json() or {}
+        batch_tag = (data.get("batch_tag") or "").strip()[:64] or None
         source_run_id = (data.get("source_run_id") or "").strip()
         if not _valid_run_id(source_run_id):
             return jsonify({"error": "Invalid source_run_id"}), 400
@@ -1291,6 +1329,7 @@ def api_generate_children():
 
             meta = {
                 "kind": "child",
+                "batch_tag": batch_tag,
                 "derived_from": source_run_id,
                 "child_index": child_index + 1,
                 "note_mode": note_mode,
@@ -1331,6 +1370,7 @@ def api_generate_children():
         log_console("ok", f"children done · {len(children)}/{count} rendered")
         return jsonify({
             "success": True,
+            "batch_tag": batch_tag,
             "count": len(children),
             "duration_sec": note_duration,
             "note_mode": note_mode,
@@ -1351,6 +1391,7 @@ def api_generate_children_llm():
     """Create child variants from a source run via the external LLM pipeline."""
     try:
         data = request.get_json() or {}
+        batch_tag = (data.get("batch_tag") or "").strip()[:64] or None
         source_run_id = (data.get("source_run_id") or "").strip()
         if not _valid_run_id(source_run_id):
             return jsonify({"error": "Invalid source_run_id"}), 400
@@ -1514,6 +1555,7 @@ def api_generate_children_llm():
 
                 meta = {
                     "kind": "child",
+                    "batch_tag": batch_tag,
                     "derived_from": source_run_id,
                     "child_index": child_index + 1,
                     "note_mode": "single",
@@ -1578,6 +1620,7 @@ def api_generate_children_llm():
                 fallback_csd_path.write_text(fallback_csd, encoding="utf-8")
                 fallback_meta = {
                     "kind": "child",
+                    "batch_tag": batch_tag,
                     "derived_from": source_run_id,
                     "child_index": child_index + 1,
                     "note_mode": "chord" if variation_tier == "high" else "arpeggio",
@@ -1622,6 +1665,7 @@ def api_generate_children_llm():
         log_console("ok", f"children llm done · {len(children)}/{count} rendered")
         return jsonify({
             "success": True,
+            "batch_tag": batch_tag,
             "count": len(children),
             "derived_from": source_run_id,
             "provider": provider,
@@ -2728,7 +2772,7 @@ def api_edit():
       {
         "run_id":      "...",
         "provider":    "openai" | "anthropic" | "gemini" | "qwen" | "pollinations",
-        "model":       e.g. "gpt-5.4" · "claude-opus-4-7" · "gemini-3.1-pro"
+        "model":       e.g. "gpt-5.4" · "claude-opus-4-7" · "gemini-3.1-pro-preview"
                            · "qwen3.6:35b-a3b-coding-mxfp8" · "openai"
                              (pollinations alias → GPT-OSS-20B),
         "instruction": "Add a reverb, keep the melody."

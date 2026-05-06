@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteRun,
   fetchCsd,
@@ -41,8 +41,29 @@ type ChildBatch = {
   motherRunId: string | null;
   mode: string;
   variation: number | null;
+  batchTag?: string;
+  expectedCount?: number;
   createdAt: number;
   children: StarterChild[];
+};
+
+type UserFolder = {
+  id: string;
+  name: string;
+  runIds: string[];
+  collapsed: boolean;
+};
+
+type PendingBatch = {
+  id: string;
+  kind: ChildBatchKind;
+  motherRunId: string | null;
+  expectedCount: number;
+  mode: string;
+  variation: number | null;
+  batchTag: string;
+  createdAt: number;
+  startedAtMs: number;
 };
 
 type SessionLlmTotals = {
@@ -76,7 +97,7 @@ const DEFAULT_CHILD_LLM_MODEL: Record<LlmProvider, string> = {
   openrouter: "openrouter/free",
   openai: "gpt-5.4",
   anthropic: "claude-opus-4-7",
-  gemini: "gemini-3.1-pro",
+  gemini: "gemini-3.1-pro-preview",
 };
 
 export default function Console() {
@@ -105,6 +126,12 @@ export default function Console() {
   const [reverbMix, setReverbMix] = useState<string>("0.18");
   const [childBatches, setChildBatches] = useState<ChildBatch[]>([]);
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
+  const [pendingBatches, setPendingBatches] = useState<PendingBatch[]>([]);
+  const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
+  const [selectionAnchorRunId, setSelectionAnchorRunId] = useState<string | null>(null);
+  const [userFolders, setUserFolders] = useState<UserFolder[]>([]);
+  const [collapsedMotherLibrary, setCollapsedMotherLibrary] = useState<Record<string, boolean>>({});
+  const [collapsedBatchGroups, setCollapsedBatchGroups] = useState<Record<string, boolean>>({});
   const [activeModelLabel, setActiveModelLabel] = useState<string>("Cstore_V1.0.2/best");
   const [serviceReady, setServiceReady] = useState<boolean>(true);
   const [lastLlmUsage, setLastLlmUsage] = useState<LlmUsage | null>(null);
@@ -169,11 +196,38 @@ export default function Console() {
     });
   }, []);
 
+  const createBatchTag = useCallback((prefix: string) => {
+    return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+  }, []);
+
+  const removeRunIdFromState = useCallback((id: string) => {
+    setSelectedRunIds((prev) => prev.filter((runId) => runId !== id));
+    setSelectionAnchorRunId((prev) => (prev === id ? null : prev));
+    setUserFolders((prev) =>
+      prev
+        .map((folder) => ({
+          ...folder,
+          runIds: folder.runIds.filter((runId) => runId !== id),
+        }))
+        .filter((folder) => folder.runIds.length > 0)
+    );
+  }, []);
+
   const appendChildBatch = useCallback((batch: Omit<ChildBatch, "id" | "createdAt">) => {
     const id = `batch_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
     const createdAt = Date.now();
-    setChildBatches((prev) => [...prev, { ...batch, id, createdAt }]);
-    setActiveBatchId(id);
+    setChildBatches((prev) => {
+      if (batch.batchTag) {
+        const existingIndex = prev.findIndex((b) => b.batchTag === batch.batchTag);
+        if (existingIndex !== -1) {
+          const next = [...prev];
+          next[existingIndex] = { ...next[existingIndex], ...batch };
+          return next;
+        }
+      }
+      return [...prev, { ...batch, id, createdAt }];
+    });
+    setActiveBatchId((prev) => prev ?? id);
   }, []);
 
   const removeChildBatch = useCallback((id: string) => {
@@ -189,6 +243,24 @@ export default function Console() {
   const clearChildBatches = useCallback(() => {
     setChildBatches([]);
     setActiveBatchId(null);
+    setPendingBatches([]);
+  }, []);
+
+  const addPendingBatch = useCallback(
+    (batch: Omit<PendingBatch, "id" | "createdAt" | "startedAtMs">) => {
+      const id = `pending_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+      const createdAt = Date.now();
+      setPendingBatches((prev) => [
+        ...prev,
+        { ...batch, id, createdAt, startedAtMs: Date.now() },
+      ]);
+      return id;
+    },
+    []
+  );
+
+  const removePendingBatch = useCallback((id: string) => {
+    setPendingBatches((prev) => prev.filter((batch) => batch.id !== id));
   }, []);
 
   const updateLlmMeter = useCallback((usage?: LlmUsage, cost?: LlmCost) => {
@@ -437,11 +509,21 @@ export default function Console() {
       since: Date.now(),
     });
     setCopied(false);
+    const batchTag = createBatchTag("starter");
+    const pendingId = addPendingBatch({
+      kind: "starter",
+      motherRunId: null,
+      expectedCount: parsedCount,
+      mode: modeLabel(noteMode),
+      variation: null,
+      batchTag,
+    });
     try {
       const data = await generateStarters({
         count: parsedCount,
         seed: parsedSeed,
         checkpoint: activeModelLabel || undefined,
+        batch_tag: batchTag,
         max_tokens: parsedMaxTokens,
         note_duration: parsedNoteDuration,
         note_mode: noteMode,
@@ -449,11 +531,14 @@ export default function Console() {
         note_low_midi: Math.min(parsedLowMidi, parsedHighMidi),
         note_high_midi: Math.max(parsedLowMidi, parsedHighMidi),
       });
+      removePendingBatch(pendingId);
       appendChildBatch({
         kind: "starter",
         motherRunId: null,
         mode: modeLabel(data.note_mode ?? noteMode),
         variation: null,
+        batchTag: data.batch_tag ?? batchTag,
+        expectedCount: parsedCount,
         children: data.starters,
       });
       upsertLibraryRuns(
@@ -488,10 +573,13 @@ export default function Console() {
     } catch (e) {
       const message = e instanceof Error ? e.message : "Starter generation failed";
       setStatus({ kind: "err", message });
+      removePendingBatch(pendingId);
     }
   }, [
     activeModelLabel,
+    addPendingBatch,
     appendChildBatch,
+    createBatchTag,
     maxTokens,
     noteDuration,
     noteHighMidi,
@@ -503,6 +591,7 @@ export default function Console() {
     parseSeed,
     refreshLibrary,
     starterCount,
+    removePendingBatch,
     upsertLibraryRuns,
   ]);
 
@@ -554,12 +643,22 @@ export default function Console() {
       since: Date.now(),
     });
     setCopied(false);
+    const batchTag = createBatchTag(childGenMode === "llm" ? "child_llm" : "child_classic");
+    const pendingId = addPendingBatch({
+      kind: childGenMode === "llm" ? "child-llm" : "child-classic",
+      motherRunId: runId,
+      expectedCount: parsedCount,
+      mode: modeLabel(noteMode),
+      variation: childGenMode === "llm" ? parsedVariationTemp : null,
+      batchTag,
+    });
     try {
       const data =
         childGenMode === "llm"
           ? await generateChildrenLlm({
               source_run_id: runId,
               count: parsedCount,
+              batch_tag: batchTag,
               provider: childLlmProvider,
               model: childLlmModel.trim(),
               think: childLlmProvider === "qwen" ? childLlmThink : undefined,
@@ -568,12 +667,14 @@ export default function Console() {
           : await generateChildren({
               source_run_id: runId,
               count: parsedCount,
+              batch_tag: batchTag,
               note_duration: parsedNoteDuration,
               note_mode: noteMode,
               note_range_mode: noteRangeMode,
               note_low_midi: Math.min(parsedLowMidi, parsedHighMidi),
               note_high_midi: Math.max(parsedLowMidi, parsedHighMidi),
             });
+      removePendingBatch(pendingId);
       if (!data.children?.length) {
         throw new Error("No children were returned by the backend.");
       }
@@ -589,6 +690,8 @@ export default function Console() {
           isLlmBatch && typeof data.variation_temperature === "number"
             ? data.variation_temperature
             : null,
+        batchTag: data.batch_tag ?? batchTag,
+        expectedCount: parsedCount,
         children: data.children,
       });
       upsertLibraryRuns(
@@ -642,10 +745,13 @@ export default function Console() {
     } catch (e) {
       const message = e instanceof Error ? e.message : "Child generation failed";
       setStatus({ kind: "err", message });
+      removePendingBatch(pendingId);
     }
   }, [
+    addPendingBatch,
     childGenMode,
     appendChildBatch,
+    createBatchTag,
     childLlmModel,
     childLlmProvider,
     childLlmThink,
@@ -661,6 +767,7 @@ export default function Console() {
     runs,
     runId,
     starterCount,
+    removePendingBatch,
     updateLlmMeter,
     upsertLibraryRuns,
   ]);
@@ -686,6 +793,10 @@ export default function Console() {
   }, []);
 
   const loadStarterChild = useCallback((child: StarterChild) => {
+    if (!child.csd) {
+      void loadRun(child.run_id);
+      return;
+    }
     setCsd(child.csd);
     setRunId(child.run_id);
     const audio = audioRef.current;
@@ -698,14 +809,17 @@ export default function Console() {
       message: `Loaded ${child.derived_from ? "child" : "starter"} ${child.child_index} · ${modeLabel(child.note_mode ?? child.starter_type)}`,
     });
     setCopied(false);
-  }, []);
+  }, [loadRun]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !audio.src) return;
     ensureAudioGraph();
     audioCtxRef.current?.resume();
-    if (audio.paused) audio.play();
+    if (audio.paused) {
+      audio.currentTime = 0;
+      audio.play();
+    }
     else audio.pause();
   }, [ensureAudioGraph]);
 
@@ -722,36 +836,6 @@ export default function Console() {
       });
     }
   }, [csd]);
-
-  // ——— Keyboard shortcuts — only when focus isn't in a text input —————
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "g" || e.key === "G") {
-        e.preventDefault();
-        runGenerate();
-      } else if (e.key === "s" || e.key === "S") {
-        e.preventDefault();
-        runGenerateStarters();
-      } else if (e.key === " ") {
-        e.preventDefault();
-        togglePlay();
-      } else if (e.key === "c" || e.key === "C") {
-        e.preventDefault();
-        copyCsd();
-      } else if ((e.key === "e" || e.key === "E") && runId) {
-        e.preventDefault();
-        setEditOpen(true);
-      } else if ((e.key === "r" || e.key === "R") && csd) {
-        e.preventDefault();
-        setManualEditOpen(true);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [runGenerate, runGenerateStarters, togglePlay, copyCsd, runId, csd]);
 
   const handleEdited = useCallback(
     (result: EditResponse) => {
@@ -835,6 +919,7 @@ export default function Console() {
       try {
         await deleteRun(id);
         setRuns((prev) => prev.filter((r) => r.run_id !== id));
+        removeRunIdFromState(id);
         setChildBatches((prev) =>
           prev
             .map((batch) => ({
@@ -863,7 +948,7 @@ export default function Console() {
         });
       }
     },
-    [refreshLibrary, runId]
+    [refreshLibrary, removeRunIdFromState, runId]
   );
 
   const handleRendered = useCallback(
@@ -903,6 +988,20 @@ export default function Console() {
     childBatches[childBatches.length - 1] ??
     null;
   const generatedChildrenMotherId = activeBatch?.motherRunId ?? null;
+  const batchGroups = useMemo(() => {
+    const groups = new Map<string, { id: string; label: string; batches: ChildBatch[] }>();
+    for (const batch of childBatches) {
+      const key = batch.motherRunId ? `mother:${batch.motherRunId}` : "starter";
+      const label = batch.motherRunId ? `mother #${batch.motherRunId.slice(-8)}` : "starter batches";
+      const current = groups.get(key);
+      if (current) {
+        current.batches.push(batch);
+      } else {
+        groups.set(key, { id: key, label, batches: [batch] });
+      }
+    }
+    return Array.from(groups.values());
+  }, [childBatches]);
 
   useEffect(() => {
     if (!childBatches.length) {
@@ -920,6 +1019,269 @@ export default function Console() {
   // (the list is capped to 50 + starred runs).
   const favoriteRuns = runs.filter((r) => r.meta?.favorite);
   const recentRuns = runs.filter((r) => !r.meta?.favorite);
+  const visibleFolderRuns = useMemo(
+    () =>
+      userFolders.map((folder) => ({
+        ...folder,
+        runs: folder.runIds
+          .map((id) => runs.find((r) => r.run_id === id))
+          .filter(Boolean) as RunEntryWithMeta[],
+      })),
+    [runs, userFolders]
+  );
+  const folderRunIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const folder of visibleFolderRuns) {
+      for (const run of folder.runs) ids.add(run.run_id);
+    }
+    return ids;
+  }, [visibleFolderRuns]);
+  const libraryRecentUnfoldered = recentRuns.filter((r) => !folderRunIds.has(r.run_id));
+  const recentChildRuns = libraryRecentUnfoldered.filter(
+    (r) => r.meta?.kind === "child" && r.meta?.derived_from
+  );
+  const recentNonChildRuns = libraryRecentUnfoldered.filter(
+    (r) => !(r.meta?.kind === "child" && r.meta?.derived_from)
+  );
+  const recentChildrenByMother = useMemo(() => {
+    const map = new Map<string, RunEntryWithMeta[]>();
+    for (const run of recentChildRuns) {
+      const mother = run.meta?.derived_from;
+      if (!mother) continue;
+      const list = map.get(mother) ?? [];
+      list.push(run);
+      map.set(mother, list);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [recentChildRuns]);
+  const librarySelectableOrder = useMemo(() => {
+    const out: string[] = [];
+    for (const run of favoriteRuns) out.push(run.run_id);
+    for (const folder of visibleFolderRuns) {
+      for (const run of folder.runs) out.push(run.run_id);
+    }
+    for (const [_, grouped] of recentChildrenByMother) {
+      for (const run of grouped) out.push(run.run_id);
+    }
+    for (const run of recentNonChildRuns) out.push(run.run_id);
+    return out;
+  }, [favoriteRuns, visibleFolderRuns, recentChildrenByMother, recentNonChildRuns]);
+  const libraryIndexMap = useMemo(
+    () =>
+      new Map(
+        librarySelectableOrder.map((id, idx) => [id, librarySelectableOrder.length - idx])
+      ),
+    [librarySelectableOrder]
+  );
+
+  const handleLibraryRowInteract = useCallback(
+    (runId: string, modifiers: { shift: boolean; meta: boolean }) => {
+      if (!modifiers.shift && !modifiers.meta) {
+        setSelectionAnchorRunId(runId);
+        setSelectedRunIds([]);
+        void loadRun(runId);
+        return;
+      }
+      if (modifiers.shift && selectionAnchorRunId) {
+        const anchorIndex = librarySelectableOrder.indexOf(selectionAnchorRunId);
+        const clickIndex = librarySelectableOrder.indexOf(runId);
+        if (anchorIndex !== -1 && clickIndex !== -1) {
+          const [start, end] =
+            anchorIndex < clickIndex ? [anchorIndex, clickIndex] : [clickIndex, anchorIndex];
+          const range = librarySelectableOrder.slice(start, end + 1);
+          setSelectedRunIds((prev) =>
+            Array.from(new Set([...(modifiers.meta ? prev : []), ...range]))
+          );
+          return;
+        }
+      }
+      setSelectionAnchorRunId(runId);
+      setSelectedRunIds((prev) =>
+        prev.includes(runId) ? prev.filter((id) => id !== runId) : [...prev, runId]
+      );
+    },
+    [librarySelectableOrder, loadRun, selectionAnchorRunId]
+  );
+
+  const handleCreateFolderFromSelected = useCallback(() => {
+    if (!selectedRunIds.length) return;
+    const name = window.prompt("Folder name for selected runs?");
+    const trimmed = name?.trim();
+    if (!trimmed) return;
+    setUserFolders((prev) => {
+      const id = `folder_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+      const selected = new Set(selectedRunIds);
+      const nextPrev = prev.map((folder) => ({
+        ...folder,
+        runIds: folder.runIds.filter((runId) => !selected.has(runId)),
+      }));
+      return [...nextPrev.filter((f) => f.runIds.length > 0), { id, name: trimmed, runIds: [...selectedRunIds], collapsed: false }];
+    });
+    setSelectedRunIds([]);
+  }, [selectedRunIds]);
+
+  const toggleFolderCollapse = useCallback((folderId: string) => {
+    setUserFolders((prev) =>
+      prev.map((folder) =>
+        folder.id === folderId ? { ...folder, collapsed: !folder.collapsed } : folder
+      )
+    );
+  }, []);
+
+  const handleDeleteSelectedRuns = useCallback(async () => {
+    if (!selectedRunIds.length) return;
+    if (!window.confirm(`Delete ${selectedRunIds.length} selected run(s)?`)) return;
+    let deleted = 0;
+    let failed = 0;
+    for (const id of selectedRunIds) {
+      try {
+        await deleteRun(id);
+        deleted += 1;
+        removeRunIdFromState(id);
+        setRuns((prev) => prev.filter((r) => r.run_id !== id));
+      } catch {
+        failed += 1;
+      }
+    }
+    setChildBatches((prev) =>
+      prev
+        .map((batch) => ({
+          ...batch,
+          children: batch.children.filter((child) => !selectedRunIds.includes(child.run_id)),
+        }))
+        .filter((batch) => batch.children.length > 0)
+    );
+    setSelectedRunIds([]);
+    await refreshLibrary(true);
+    if (failed > 0) {
+      setStatus({
+        kind: "err",
+        message: `Deleted ${deleted} selected run(s), ${failed} failed`,
+      });
+      return;
+    }
+    setStatus({ kind: "ok", message: `Deleted ${deleted} selected run(s)` });
+  }, [refreshLibrary, removeRunIdFromState, selectedRunIds]);
+
+  useEffect(() => {
+    setSelectedRunIds((prev) => prev.filter((runId) => runs.some((run) => run.run_id === runId)));
+  }, [runs]);
+
+  // ——— Keyboard shortcuts — only when focus isn't in a text input —————
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const withMeta = e.metaKey || e.ctrlKey;
+      if (withMeta && e.key === "Backspace" && selectedRunIds.length > 0) {
+        e.preventDefault();
+        void handleDeleteSelectedRuns();
+        return;
+      }
+      if (
+        withMeta &&
+        e.shiftKey &&
+        (e.key === "f" || e.key === "F") &&
+        selectedRunIds.length > 0
+      ) {
+        e.preventDefault();
+        handleCreateFolderFromSelected();
+        return;
+      }
+      if (withMeta || e.altKey) return;
+      if (e.key === "g" || e.key === "G") {
+        e.preventDefault();
+        runGenerate();
+      } else if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        runGenerateStarters();
+      } else if (e.key === " ") {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.key === "c" || e.key === "C") {
+        e.preventDefault();
+        copyCsd();
+      } else if ((e.key === "e" || e.key === "E") && runId) {
+        e.preventDefault();
+        setEditOpen(true);
+      } else if ((e.key === "r" || e.key === "R") && csd) {
+        e.preventDefault();
+        setManualEditOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    copyCsd,
+    csd,
+    handleCreateFolderFromSelected,
+    handleDeleteSelectedRuns,
+    runGenerate,
+    runGenerateStarters,
+    runId,
+    selectedRunIds.length,
+    togglePlay,
+  ]);
+
+  useEffect(() => {
+    if (!pendingBatches.length) return;
+    const timer = window.setInterval(() => {
+      void refreshLibrary(true);
+    }, 1200);
+    return () => window.clearInterval(timer);
+  }, [pendingBatches, refreshLibrary]);
+
+  useEffect(() => {
+    if (!pendingBatches.length) return;
+    setChildBatches((prev) => {
+      let next = [...prev];
+      for (const pending of pendingBatches) {
+        const matchedRuns = runs.filter((run) => {
+          const meta = run.meta;
+          if (!meta || meta.batch_tag !== pending.batchTag) return false;
+          if (pending.kind === "starter") return meta.kind === "starter";
+          if (pending.motherRunId) return meta.kind === "child" && meta.derived_from === pending.motherRunId;
+          return meta.kind === "child";
+        });
+        const children: StarterChild[] = matchedRuns.map((run, index) => ({
+          csd: "",
+          run_id: run.run_id,
+          csd_url: `/generated/${encodeURIComponent(run.run_id)}/output.csd`,
+          wav_url: `/generated/${encodeURIComponent(run.run_id)}/output.wav`,
+          starter_type: modeLabel(run.meta?.starter_type) as NoteMode,
+          note_mode: modeLabel(run.meta?.note_mode ?? run.meta?.starter_type) as NoteMode,
+          child_index: run.meta?.child_index ?? index + 1,
+          duration_sec: (run.meta?.duration_sec ?? Number(noteDuration)) || 1.5,
+          derived_from: run.meta?.derived_from,
+        }));
+        const batchPatch: Omit<ChildBatch, "id" | "createdAt"> = {
+          kind: pending.kind,
+          motherRunId: pending.motherRunId,
+          mode: pending.mode,
+          variation: pending.variation,
+          batchTag: pending.batchTag,
+          expectedCount: pending.expectedCount,
+          children,
+        };
+        const idx = next.findIndex((batch) => batch.batchTag === pending.batchTag);
+        if (idx !== -1) {
+          const existing = next[idx];
+          const mergedChildren =
+            batchPatch.children.length > existing.children.length
+              ? batchPatch.children
+              : existing.children;
+          next[idx] = { ...existing, ...batchPatch, children: mergedChildren };
+        } else {
+          next.push({
+            id: `live_${pending.id}`,
+            createdAt: pending.createdAt,
+            ...batchPatch,
+          });
+        }
+      }
+      return next;
+    });
+  }, [noteDuration, pendingBatches, runs]);
 
   const handleModelChange = useCallback((active: string, selection: string | null) => {
     setActiveModelLabel(selection ?? active);
@@ -1030,15 +1392,38 @@ export default function Console() {
             lets `sticky top-…` actually pin. */}
         <aside className="col-span-12 border border-ink bg-paper-2 md:sticky md:top-4 md:col-span-3 md:self-start">
           <div className="flex items-center justify-between border-b border-ink px-3 py-2">
-            <span className="eyebrow-ink">Library</span>
-            <button
-              onClick={() => {
-                void refreshLibrary();
-              }}
-              className="mono text-[10px] uppercase tracking-widest text-ink-muted hover:text-ink-red"
-            >
-              refresh
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="eyebrow-ink">Library</span>
+              {selectedRunIds.length > 0 && (
+                <span className="mono border border-rule px-1 text-[9px] uppercase tracking-widest text-ink-muted">
+                  {selectedRunIds.length} selected
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCreateFolderFromSelected}
+                disabled={!selectedRunIds.length}
+                className="mono border border-rule bg-paper px-2 py-1 text-[10px] uppercase tracking-widest text-ink-muted hover:text-ink disabled:opacity-40"
+              >
+                folder
+              </button>
+              <button
+                onClick={handleDeleteSelectedRuns}
+                disabled={!selectedRunIds.length}
+                className="mono border border-rule bg-paper px-2 py-1 text-[10px] uppercase tracking-widest text-ink-muted hover:text-ink-red disabled:opacity-40"
+              >
+                delete
+              </button>
+              <button
+                onClick={() => {
+                  void refreshLibrary();
+                }}
+                className="mono text-[10px] uppercase tracking-widest text-ink-muted hover:text-ink-red"
+              >
+                refresh
+              </button>
+            </div>
           </div>
           {/* Split the library into two sections: Favourites (starred timbres
               the user wants pinned) and Recent. The scroll wraps BOTH so the
@@ -1065,13 +1450,14 @@ export default function Console() {
                       </span>
                     </div>
                     <ol>
-                      {favoriteRuns.map((r, i) => (
+                      {favoriteRuns.map((r) => (
                         <LibraryRow
                           key={r.run_id}
                           run={r}
-                          index={favoriteRuns.length - i}
+                          index={libraryIndexMap.get(r.run_id) ?? 0}
                           active={r.run_id === runId}
-                          onLoad={loadRun}
+                          selected={selectedRunIds.includes(r.run_id)}
+                          onInteract={handleLibraryRowInteract}
                           onDelete={handleDeleteRun}
                           onToggleFavorite={toggleFavorite}
                         />
@@ -1080,30 +1466,95 @@ export default function Console() {
                   </div>
                 )}
 
-                {/* Recent sub-section — everything that isn't starred. */}
+                {visibleFolderRuns.map((folder) => (
+                  <div key={folder.id}>
+                    <button
+                      type="button"
+                      onClick={() => toggleFolderCollapse(folder.id)}
+                      className="flex w-full items-center justify-between border-b border-rule-2 bg-paper-3/50 px-3 py-1.5 text-left"
+                    >
+                      <span className="eyebrow">{folder.collapsed ? "▸" : "▾"} {folder.name}</span>
+                      <span className="mono tabular text-[10px] text-ink-muted">{folder.runs.length}</span>
+                    </button>
+                    {!folder.collapsed && (
+                      <ol>
+                        {folder.runs.map((r) => (
+                          <LibraryRow
+                            key={r.run_id}
+                            run={r}
+                            index={libraryIndexMap.get(r.run_id) ?? 0}
+                            active={r.run_id === runId}
+                            selected={selectedRunIds.includes(r.run_id)}
+                            onInteract={handleLibraryRowInteract}
+                            onDelete={handleDeleteRun}
+                            onToggleFavorite={toggleFavorite}
+                          />
+                        ))}
+                      </ol>
+                    )}
+                  </div>
+                ))}
+
                 <div>
+                  {recentChildrenByMother.map(([motherId, grouped]) => (
+                    <div key={motherId}>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCollapsedMotherLibrary((prev) => ({
+                            ...prev,
+                            [motherId]: !prev[motherId],
+                          }))
+                        }
+                        className="flex w-full items-center justify-between border-b border-rule-2 bg-paper-3/20 px-3 py-1.5 text-left"
+                      >
+                        <span className="eyebrow">
+                          {collapsedMotherLibrary[motherId] ? "▸" : "▾"} mother #{motherId.slice(-8)}
+                        </span>
+                        <span className="mono tabular text-[10px] text-ink-muted">{grouped.length}</span>
+                      </button>
+                      {!collapsedMotherLibrary[motherId] && (
+                        <ol>
+                          {grouped.map((r) => (
+                            <LibraryRow
+                              key={r.run_id}
+                              run={r}
+                              index={libraryIndexMap.get(r.run_id) ?? 0}
+                              active={r.run_id === runId}
+                              selected={selectedRunIds.includes(r.run_id)}
+                              onInteract={handleLibraryRowInteract}
+                              onDelete={handleDeleteRun}
+                              onToggleFavorite={toggleFavorite}
+                            />
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                  ))}
+
                   {favoriteRuns.length > 0 && (
                     <div className="flex items-center justify-between border-b border-rule-2 bg-paper-2 px-3 py-1.5">
                       <span className="eyebrow">recent</span>
                       <span className="mono tabular text-[10px] text-ink-muted">
-                        {recentRuns.length}
+                        {recentNonChildRuns.length}
                       </span>
                     </div>
                   )}
-                  {recentRuns.length === 0 ? (
+                  {recentNonChildRuns.length === 0 ? (
                     <p className="mono px-3 py-3 text-[11px] text-ink-muted">
                       Everything here is a favourite — generate a new
                       timbre with <span className="kbd">G</span>.
                     </p>
                   ) : (
                     <ol>
-                      {recentRuns.map((r, i) => (
+                      {recentNonChildRuns.map((r) => (
                         <LibraryRow
                           key={r.run_id}
                           run={r}
-                          index={recentRuns.length - i}
+                          index={libraryIndexMap.get(r.run_id) ?? 0}
                           active={r.run_id === runId}
-                          onLoad={loadRun}
+                          selected={selectedRunIds.includes(r.run_id)}
+                          onInteract={handleLibraryRowInteract}
                           onDelete={handleDeleteRun}
                           onToggleFavorite={toggleFavorite}
                         />
@@ -1153,15 +1604,13 @@ export default function Console() {
                   <button
                     onClick={runGenerate}
                     disabled={working}
-                    className="flex items-center gap-2 border border-ink bg-ink px-4 py-2 text-paper disabled:opacity-60"
+                    className="flex items-center gap-2 border border-ink bg-paper px-4 py-2 text-ink transition-colors active:bg-paper-3 disabled:opacity-60"
                   >
                     <span aria-hidden>●</span>
                     <span className="mono text-[12px] uppercase tracking-widest">
                       {working ? "Rendering" : "Generate One Render"}
                     </span>
-                    <span className="kbd !border-paper !bg-ink !text-paper">
-                      G
-                    </span>
+                    <span className="kbd">G</span>
                   </button>
 
                   <button
@@ -1389,7 +1838,7 @@ export default function Console() {
                   </label>
                 </div>
 
-                {childBatches.length > 0 && (
+                {(childBatches.length > 0 || pendingBatches.length > 0) && (
                   <div className="mt-3 border border-rule bg-paper">
                     <div className="flex items-center justify-between border-b border-rule px-3 py-1.5">
                       <span className="eyebrow">
@@ -1399,96 +1848,124 @@ export default function Console() {
                           : ""}
                       </span>
                       <span className="mono tabular text-[10px] text-ink-muted">
-                        {activeBatch?.children.length ?? 0} · {activeBatch?.mode ?? noteMode} ·{" "}
-                        {noteDuration}s
+                        {childBatches.length} ready · {pendingBatches.length} pending
                       </span>
                     </div>
-                    <div className="flex flex-wrap items-center gap-1 border-b border-rule px-2 py-1.5">
-                      {childBatches.map((batch, index) => (
-                        <div key={batch.id} className="flex items-center">
+                    <div className="space-y-2 border-b border-rule px-2 py-2">
+                      {batchGroups.map((group) => (
+                        <div key={group.id} className="border border-rule">
                           <button
                             type="button"
-                            onClick={() => setActiveBatchId(batch.id)}
-                            className={
-                              "mono border px-2 py-1 text-[10px] uppercase tracking-widest " +
-                              (activeBatch?.id === batch.id
-                                ? "border-ink-red bg-paper-3 text-ink"
-                                : "border-rule bg-paper text-ink-muted hover:text-ink")
+                            onClick={() =>
+                              setCollapsedBatchGroups((prev) => ({
+                                ...prev,
+                                [group.id]: !prev[group.id],
+                              }))
                             }
-                            title={
-                              batch.motherRunId
-                                ? `mother #${batch.motherRunId.slice(-8)}`
-                                : "starter batch"
-                            }
+                            className="flex w-full items-center justify-between bg-paper-3/30 px-2 py-1.5 text-left"
                           >
-                            {batch.kind === "starter"
-                              ? `Starter #${index + 1}`
-                              : batch.kind === "child-classic"
-                              ? `Classic Child #${index + 1}`
-                              : `LLM Child #${index + 1}`}
-                            {batch.motherRunId ? ` · ${batch.motherRunId.slice(-8)}` : ""}
+                            <span className="eyebrow">
+                              {collapsedBatchGroups[group.id] ? "▸" : "▾"} {group.label}
+                            </span>
+                            <span className="mono tabular text-[10px] text-ink-muted">
+                              {group.batches.reduce((sum, batch) => sum + batch.children.length, 0)}
+                            </span>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => removeChildBatch(batch.id)}
-                            className="mono border-y border-r border-rule px-1 py-1 text-[10px] text-ink-muted hover:text-ink-red"
-                            title="Close batch"
-                            aria-label="Close batch"
-                          >
-                            x
-                          </button>
+                          {!collapsedBatchGroups[group.id] && (
+                            <div className="space-y-1 px-2 py-2">
+                              {group.batches.map((batch, index) => (
+                                <div key={batch.id} className="border border-rule">
+                                  <div className="flex items-center justify-between border-b border-rule bg-paper px-2 py-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveBatchId(batch.id)}
+                                      className={
+                                        "mono text-[10px] uppercase tracking-widest " +
+                                        (activeBatch?.id === batch.id ? "text-ink-red" : "text-ink-muted")
+                                      }
+                                    >
+                                      {batch.kind === "starter"
+                                        ? `Starter #${index + 1}`
+                                        : batch.kind === "child-classic"
+                                        ? `Classic Child #${index + 1}`
+                                        : `LLM Child #${index + 1}`}
+                                      {batch.expectedCount && batch.children.length < batch.expectedCount
+                                        ? ` · ${batch.children.length}/${batch.expectedCount}`
+                                        : ""}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => removeChildBatch(batch.id)}
+                                      className="mono text-[10px] uppercase tracking-widest text-ink-muted hover:text-ink-red"
+                                      title="Close batch"
+                                      aria-label="Close batch"
+                                    >
+                                      close
+                                    </button>
+                                  </div>
+                                  <div className="grid grid-cols-1 gap-px bg-rule sm:grid-cols-2 xl:grid-cols-3">
+                                    {batch.children.map((child) => (
+                                      <button
+                                        key={child.run_id}
+                                        type="button"
+                                        onClick={() => loadStarterChild(child)}
+                                        className={
+                                          "bg-paper px-3 py-2 text-left hover:bg-paper-3 " +
+                                          (child.run_id === runId ? "outline outline-1 outline-ink-red" : "")
+                                        }
+                                      >
+                                        <div className="flex items-center justify-between">
+                                          <span className="mono text-[11px] uppercase tracking-widest">
+                                            {child.derived_from ? "child" : "starter"}
+                                          </span>
+                                          <span className="mono tabular text-[10px] text-ink-muted">
+                                            #{child.child_index}
+                                          </span>
+                                        </div>
+                                        <div className="mono mt-1 text-[10px] text-ink-muted">
+                                          {modeLabel(child.note_mode ?? child.starter_type)} · {child.duration_sec}s · {child.run_id.slice(-8)}
+                                        </div>
+                                        {child.derived_from && (
+                                          <div className="mono mt-1 text-[10px] text-ink-muted">
+                                            from #{child.derived_from.slice(-8)}
+                                          </div>
+                                        )}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       ))}
+                      {pendingBatches.length > 0 && (
+                        <div className="border border-rule bg-paper-3/20 px-3 py-2">
+                          <div className="eyebrow">pending</div>
+                          <div className="mono mt-1 text-[10px] text-ink-muted">
+                            {pendingBatches
+                              .map(
+                                (batch) =>
+                                  `${batch.kind === "starter" ? "starter" : "child"} ${batch.mode} · ${batch.expectedCount} outputs`
+                              )
+                              .join(" · ")}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between px-3 py-1.5">
+                      <span className="mono text-[10px] text-ink-muted">
+                        {activeBatch?.variation != null
+                          ? `active llm var ${activeBatch.variation.toFixed(2)}`
+                          : "select any generated child to load"}
+                      </span>
                       <button
                         type="button"
                         onClick={clearChildBatches}
-                        className="mono ml-auto border border-rule px-2 py-1 text-[10px] uppercase tracking-widest text-ink-muted hover:text-ink-red"
+                        className="mono border border-rule px-2 py-1 text-[10px] uppercase tracking-widest text-ink-muted hover:text-ink-red"
                       >
                         clear all
                       </button>
-                    </div>
-                    <div className="border-b border-rule px-3 py-1.5">
-                      <span className="mono text-[10px] text-ink-muted">
-                        mother{" "}
-                        {generatedChildrenMotherId
-                          ? `#${generatedChildrenMotherId.slice(-8)}`
-                          : runId
-                          ? `#${runId.slice(-8)}`
-                          : "—"}
-                        {activeBatch?.variation != null
-                          ? ` · llm var ${activeBatch.variation.toFixed(2)}`
-                          : ""}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-1 gap-px bg-rule sm:grid-cols-2 xl:grid-cols-3">
-                      {(activeBatch?.children ?? []).map((child) => (
-                        <button
-                          key={child.run_id}
-                          type="button"
-                          onClick={() => loadStarterChild(child)}
-                          className={
-                            "bg-paper px-3 py-2 text-left hover:bg-paper-3 " +
-                            (child.run_id === runId ? "outline outline-1 outline-ink-red" : "")
-                          }
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="mono text-[11px] uppercase tracking-widest">
-                              {child.derived_from ? "child" : "starter"}
-                            </span>
-                            <span className="mono tabular text-[10px] text-ink-muted">
-                              #{child.child_index}
-                            </span>
-                          </div>
-                          <div className="mono mt-1 text-[10px] text-ink-muted">
-                            {modeLabel(child.note_mode ?? child.starter_type)} · {child.duration_sec}s · {child.run_id.slice(-8)}
-                          </div>
-                          {child.derived_from && (
-                            <div className="mono mt-1 text-[10px] text-ink-muted">
-                              from #{child.derived_from.slice(-8)}
-                            </div>
-                          )}
-                        </button>
-                      ))}
                     </div>
                   </div>
                 )}
@@ -1682,7 +2159,7 @@ export default function Console() {
                   scroll vertically together with the code. The gutter uses
                   `sticky left-0` so horizontal scroll on long lines keeps
                   the numbers pinned instead of sliding off-screen. */}
-              <div className="scroll-ink grid max-h-[420px] grid-cols-[3rem_1fr] overflow-auto">
+              <div className="scroll-ink relative grid max-h-[420px] grid-cols-[3rem_1fr] overflow-auto">
                 <pre className="mono tabular sticky left-0 z-10 select-none whitespace-pre border-r border-rule-2 bg-paper-3/40 py-3 text-right text-[11px] leading-[1.55] text-ink-muted">
                   {csd
                     ? csd
@@ -1694,6 +2171,7 @@ export default function Console() {
                 <pre className="mono whitespace-pre p-3 text-[12px] leading-[1.55] text-ink">
                   {csd || "# Press G to draft a .csd — or pick a render from the library."}
                 </pre>
+                {working && <div className="hatch pointer-events-none absolute inset-0" />}
               </div>
             </div>
 
@@ -1762,14 +2240,16 @@ function LibraryRow({
   run,
   index,
   active,
-  onLoad,
+  selected,
+  onInteract,
   onDelete,
   onToggleFavorite,
 }: {
   run: RunEntryWithMeta;
   index: number;
   active: boolean;
-  onLoad: (runId: string) => void;
+  selected: boolean;
+  onInteract: (runId: string, modifiers: { shift: boolean; meta: boolean }) => void;
   onDelete: (runId: string) => void;
   onToggleFavorite: (runId: string) => void;
 }) {
@@ -1779,9 +2259,14 @@ function LibraryRow({
     <li
       className={
         "group flex cursor-pointer items-baseline gap-3 border-b border-rule-2 px-3 py-2 " +
-        (active ? "bg-paper-3" : "hover:bg-paper-3/60")
+        (selected ? "bg-paper-3/80" : active ? "bg-paper-3" : "hover:bg-paper-3/60")
       }
-      onClick={() => onLoad(run.run_id)}
+      onClick={(e) =>
+        onInteract(run.run_id, {
+          shift: e.shiftKey,
+          meta: e.metaKey || e.ctrlKey,
+        })
+      }
     >
       <span className="mono tabular w-6 text-[10px] text-ink-muted">
         {String(index).padStart(3, "0")}

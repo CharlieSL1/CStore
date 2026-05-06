@@ -77,6 +77,8 @@ type SessionLlmTotals = {
   has_estimated_usd: boolean;
 };
 
+const USER_FOLDERS_STORAGE_KEY = "cstore.library.userFolders.v1";
+
 function modeLabel(mode?: string): string {
   if (!mode) return "single";
   return mode === "scale" ? "arpeggio" : mode;
@@ -157,6 +159,43 @@ export default function Console() {
   const convolverRef = useRef<ConvolverNode | null>(null);
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
+
+  // Restore user-created library folders from local storage so page refresh
+  // keeps the folder structure instead of resetting to a flat list.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(USER_FOLDERS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+      const sanitized: UserFolder[] = parsed
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+        .map((item) => ({
+          id: String(item.id ?? ""),
+          name: String(item.name ?? "").trim(),
+          runIds: Array.isArray(item.runIds)
+            ? item.runIds.map((id) => String(id)).filter(Boolean)
+            : [],
+          collapsed: Boolean(item.collapsed),
+        }))
+        .filter((folder) => folder.id && folder.name && folder.runIds.length > 0);
+      if (sanitized.length > 0) setUserFolders(sanitized);
+    } catch {
+      // Ignore corrupted local state and fall back to empty folders.
+    }
+  }, []);
+
+  // Persist folder state so refresh/navigation keeps the user's grouping.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        USER_FOLDERS_STORAGE_KEY,
+        JSON.stringify(userFolders)
+      );
+    } catch {
+      // Ignore quota/private-mode errors; folders still work in-memory.
+    }
+  }, [userFolders]);
 
   useEffect(() => {
     setChildLlmModel(DEFAULT_CHILD_LLM_MODEL[childLlmProvider]);
@@ -1310,7 +1349,7 @@ export default function Console() {
       {/* ———— Status strip — status messages live at the top of the console
               rather than in a toast, matching the DAW aesthetic. ———— */}
       <div className="flex items-center justify-between border border-ink bg-paper-2 px-4 py-2 text-[12px]">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           <span
             aria-hidden
             className={
@@ -1324,7 +1363,7 @@ export default function Console() {
                 : "bg-ink-muted")
             }
           />
-          <span className="mono tabular text-ink">
+          <span className="mono tabular break-words text-ink">
             {status.kind === "idle"
               ? "READY · awaiting input"
               : status.kind === "working"
@@ -2159,7 +2198,7 @@ export default function Console() {
                   scroll vertically together with the code. The gutter uses
                   `sticky left-0` so horizontal scroll on long lines keeps
                   the numbers pinned instead of sliding off-screen. */}
-              <div className="scroll-ink relative grid max-h-[420px] grid-cols-[3rem_1fr] overflow-auto">
+              <div className="scroll-ink relative grid max-h-[420px] grid-cols-[3rem_1fr] overflow-auto overscroll-contain">
                 <pre className="mono tabular sticky left-0 z-10 select-none whitespace-pre border-r border-rule-2 bg-paper-3/40 py-3 text-right text-[11px] leading-[1.55] text-ink-muted">
                   {csd
                     ? csd

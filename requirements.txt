@@ -4,3 +4,4 @@ datasets
 numpy
 soundfile>=0.12
 flask>=3.0
+requests>=2.31

@@ -36,9 +36,7 @@ cd model
 # Download and extract at least one checkpoint from Releases into:
 # model/checkpoints/<checkpoint_name>/best
 # https://github.com/CharlieSL1/CStore/releases
-cd ..
-cd model
-python evaluate.py --checkpoint checkpoints/Cstore_V1.0.1/best --num_samples 100 --seed 42
+python evaluate.py --checkpoint checkpoints/Cstore_V1.0.2/best --num_samples 100 --seed 42
 ```
 
 **Requirements** — Python 3.11+, PyTorch, Transformers, [Csound](https://csound.com/) 6.18.0
@@ -151,7 +149,7 @@ Full UI documentation, keyboard shortcuts, and API reference live in
 
 | Task | Command |
 |------|---------|
-| **Evaluate** | `python evaluate.py --checkpoint checkpoints/Cstore_V1.0.1/best --num_samples 100` |
+| **Evaluate** | `python evaluate.py --checkpoint checkpoints/Cstore_V1.0.2/best --num_samples 100` |
 | **Generate** | `python generate.py` |
 | **Train** | `python train_finetune_expert.py` → `train_finetune_continuation.py` |
 

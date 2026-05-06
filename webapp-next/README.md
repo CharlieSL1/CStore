@@ -42,9 +42,11 @@ webapp-next/
 
 - Node.js 20+
 - Python 3.11+ with the deps in the repo root: `pip install -r ../requirements.txt`
+- Use the same Python interpreter/venv for install and runtime (so `npm run server` sees installed deps)
 - [Csound](https://csound.com/) 6.18+ on your `PATH` (the `csound` binary)
 - At least one checkpoint in `../model/checkpoints/` (default: `Cstore_V1.0.2/best`)
 - Checkpoints are not committed to git; download from [Releases](https://github.com/CharlieSL1/CStore/releases) if missing.
+- `soundfile` may require system `libsndfile` (`brew install libsndfile` on macOS).
 
 ## Run it
 
@@ -66,6 +68,17 @@ Open http://localhost:3000.
 `python server/app.py`. You can also run those commands directly if you prefer
 a Python venv.
 
+Recommended venv flow:
+
+```bash
+# from repo root
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cd webapp-next
+npm run server
+```
+
 If backend startup fails, check:
 
 ```bash
@@ -77,6 +90,20 @@ csound --version
 
 To point the UI at a backend on a different host/port, set
 `CSTORE_BACKEND_URL` before `npm run dev` — see `next.config.ts`.
+
+### Environment variables
+
+Required for basic local run:
+
+- none (defaults work when backend is at `http://127.0.0.1:5000`).
+
+Optional:
+
+- `CSTORE_BACKEND_URL`: override Next.js proxy target (default `http://127.0.0.1:5000`).
+- `CSTORE_OLLAMA_URL`: Qwen/Ollama endpoint (default `http://127.0.0.1:11434`).
+- `CSTORE_POLLINATIONS_URL`: Pollinations endpoint (default `https://text.pollinations.ai`).
+- `CSTORE_OPENROUTER_URL`: OpenRouter endpoint (default `https://openrouter.ai/api/v1`).
+- `CSTORE_COST_*`: per-provider token price overrides used for cost estimation.
 
 ## Keyboard shortcuts
 
@@ -183,7 +210,7 @@ token counts and an estimated cost payload.
 | **OpenRouter · free**  | ✓            | `openrouter/free` (router), `qwen/qwen3-coder:free`, `openai/gpt-oss-20b:free`          |
 | OpenAI                 | ✓            | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.3-instant`                             |
 | Anthropic              | ✓            | `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`                      |
-| Gemini                 | ✓            | `gemini-3.1-pro`, `gemini-3-flash-preview`                                               |
+| Gemini                 | ✓            | `gemini-3.1-pro-preview`, `gemini-3-flash-preview`                                       |
 
 The model field is free text, so newer IDs work without a code change.
 Qwen reads `CSTORE_OLLAMA_URL` (default `http://127.0.0.1:11434`);
